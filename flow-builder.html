@@ -1,0 +1,2566 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1.0" />
+<title>Flow 繪製工具</title>
+<!-- 雲端存讀（供跨單位協作／主管彙整用）需要 supabase-js。若你只在本機單機
+     使用，不填 SUPABASE_URL/SUPABASE_ANON_KEY 也完全沒問題 —— 下方雲端相關
+     按鈕會自動顯示為未設定，其餘功能不受影響。 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{
+  --bg:#eef0f4; --surface:#ffffff; --border:#e0e2e8; --border-soft:#edeef2;
+  --ink:#16181d; --muted:#6b7280; --muted-soft:#9aa0a6;
+  --accent:#5e6ad2; --accent-ink:#4547a9; --accent-soft:#edeeff;
+  --rect-bg:#eef2ff; --rect-border:#5e6ad2;
+  --dia-bg:#fff7e6; --dia-border:#d9a441;
+  --red:#c0392b; --red-soft:#fdecea;
+  --stage-w:620px; --label-w:150px;
+  --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.07);
+  /* Morandi (muted/dusty) palette — scoped to the toolbar, legend bar, left
+     task-label column, and the org/file side panel. Canvas/node/edge colors
+     (stage colors, --accent, rect/diamond colors) are left untouched since
+     they carry semantic meaning (which stage, selection state, etc.). */
+  --m-bg:#e7e2da; --m-surface:#f1ede6; --m-border:#d6cec1;
+  --m-ink:#4a4238; --m-muted:#8f8374; --m-accent:#a6877a; --m-accent-ink:#8a6c60;
+  --m-accent-soft:#efe3da; --m-danger:#b3695a;
+  /* explicit swatch colors Jerry picked for the two darker, more saturated
+     bands: #66828E for the top toolbar, #586D80 for the left task-name
+     column. These are dark enough that text/icons inside them switch to
+     white rather than the --m-ink/--m-muted used elsewhere. */
+  --tb-bg:#66828e; --tb-bg-dark:#56717c;
+  --tl-bg:#586d80; --tl-bg-dark:#46596a;
+  /* deeper warm-taupe Morandi for the org-structure side panel — a distinct
+     hue family from the cool teal toolbar/task-list bands above, but still
+     within the same dusty/muted Morandi register (shares its hue with
+     --m-accent/--m-danger) so the two bands read as coordinated, not clashing. */
+  --sp-bg:#8a7a6d; --sp-bg-dark:#6f6156;
+}
+*{box-sizing:border-box;}
+html,body{margin:0; height:100%;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); font-size:13.5px;}
+button{font-family:inherit; cursor:pointer;}
+input,textarea{font-family:inherit;}
+
+/* ---------- toolbar ---------- */
+.toolbar{position:sticky; top:0; z-index:100; background:var(--tb-bg); border-bottom:1px solid var(--tb-bg-dark);
+  display:flex; align-items:center; gap:10px; padding:10px 18px; flex-wrap:wrap;}
+.brand{display:flex; align-items:center; gap:8px; font-weight:800; font-size:14.5px; white-space:nowrap; color:#fff;}
+.brand .dot{width:9px; height:9px; border-radius:50%; background:#fff;}
+.tbtn{border:1px solid var(--m-border); background:var(--m-surface); color:var(--m-ink); border-radius:8px; padding:6px 11px; font-size:12.5px; white-space:nowrap; transition:.15s;}
+.tbtn:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
+.tbtn.primary{background:var(--m-accent); color:#fff; border-color:var(--m-accent);}
+.tbtn.primary:hover{background:var(--m-accent-ink); border-color:var(--m-accent-ink); color:#fff;}
+.zoomgroup{display:flex; align-items:center; gap:2px; border:1px solid var(--m-border); border-radius:8px; padding:2px; background:var(--m-surface);}
+.zoomgroup button{border:none; background:transparent; width:22px; height:22px; border-radius:6px; font-size:13px; color:var(--m-ink);}
+.zoomgroup button:hover{background:var(--m-bg);}
+.zoomgroup .zlabel{font-size:11px; color:var(--m-muted); width:36px; text-align:center;}
+.tb-right{margin-left:auto; display:flex; gap:8px; align-items:center;}
+
+/* single "Export ▾" dropdown collecting every import/export/reset action that
+   used to be spread across the toolbar and the side panel — everything
+   file-related now lives in one place, top-right. */
+.export-dropdown{position:relative;}
+.export-menu{display:none; flex-direction:column; gap:2px; position:absolute; top:calc(100% + 6px); right:0; min-width:230px;
+  background:var(--m-surface); border:1px solid var(--m-border); border-radius:10px; padding:6px; box-shadow:0 8px 22px rgba(0,0,0,.2); z-index:200;}
+.export-menu.open{display:flex;}
+.export-item{display:block; width:100%; text-align:left; border:none; background:transparent; color:var(--m-ink);
+  border-radius:7px; padding:8px 10px; font-size:12.5px; white-space:nowrap;}
+.export-item:hover{background:var(--m-bg);}
+.export-item.danger:hover{color:var(--m-danger); background:var(--m-accent-soft);}
+.export-item.filebtn{position:relative; overflow:hidden;}
+.export-item.filebtn input[type=file]{position:absolute; inset:0; opacity:0; cursor:pointer;}
+.export-menu-sep{height:1px; background:var(--m-border); margin:4px 2px;}
+
+/* ---------- stage ("帽子") picker — shown whenever a new step/decision is
+   being added, so it lands in the stage the person actually intended instead
+   of always defaulting to stage 1 and having to be dragged across every
+   column afterward. ---------- */
+.stage-pick-menu{position:fixed; z-index:300; background:var(--m-surface); border:1px solid var(--m-border);
+  border-radius:10px; padding:6px; box-shadow:0 8px 22px rgba(0,0,0,.2); display:flex; flex-direction:column; gap:2px; min-width:210px;}
+.stage-pick-item{display:flex; align-items:center; gap:8px; border:none; background:transparent; text-align:left;
+  width:100%; padding:7px 9px; border-radius:7px; font-size:12px; color:var(--m-ink);}
+.stage-pick-item:hover{background:var(--m-bg);}
+.stage-pick-num{width:16px; height:16px; border-radius:50%; color:#fff; font-size:9px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; flex:0 0 16px;}
+
+/* ---------- small centered dialog for cloud identity capture (name/unit/role) ----------
+   Deliberately a separate, smaller overlay from the full-screen 教學與範例 modal —
+   this one is a quick one-time gate, not a browsing surface. */
+.tiny-modal-overlay{position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:600; display:none; align-items:center; justify-content:center;}
+.tiny-modal-overlay.open{display:flex;}
+.tiny-modal-card{background:var(--m-surface); border-radius:14px; width:min(360px,90vw); padding:22px 22px 18px; box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.tiny-modal-card h3{margin:0 0 4px; font-size:15px; color:var(--m-ink);}
+.tiny-modal-card p.tiny-modal-desc{margin:0 0 14px; font-size:11.5px; color:var(--m-muted); line-height:1.5;}
+.tiny-modal-card label{display:block; font-size:11px; color:var(--m-muted); margin:10px 0 4px;}
+.tiny-modal-card input{width:100%; box-sizing:border-box; border:1px solid var(--m-border); border-radius:7px; padding:7px 9px; font-size:12.5px; background:#fff; color:var(--m-ink);}
+.tiny-modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:18px;}
+.tiny-modal-actions button{border:none; border-radius:7px; padding:7px 14px; font-size:12px; cursor:pointer;}
+.tiny-modal-actions .tm-primary{background:var(--m-accent); color:var(--m-accent-ink);}
+.tiny-modal-actions .tm-secondary{background:transparent; color:var(--m-muted);}
+
+.legend-bar{display:flex; gap:16px; align-items:center; padding:6px 18px; font-size:11px; color:var(--m-muted); background:var(--m-surface); border-bottom:1px solid var(--m-border); flex-wrap:wrap;}
+.legend-bar span{display:inline-flex; align-items:center; gap:5px;}
+.leg-box{width:13px; height:13px; border-radius:3px; display:inline-block;}
+.leg-dia{width:11px; height:11px; display:inline-block; clip-path:polygon(50% 2%, 98% 50%, 50% 98%, 2% 50%);}
+.leg-line{width:16px; height:0; border-top:2px solid var(--m-muted); display:inline-block;}
+.leg-line.dashed{border-top-style:dashed; border-color:var(--red);}
+
+/* ---------- main layout: left org/file side panel + scrollable canvas ---------- */
+.main-layout{display:flex; height:calc(100vh - 84px);}
+.side-panel{flex:0 0 236px; width:236px; overflow-y:auto; background:var(--sp-bg); border-right:1.5px solid var(--sp-bg-dark); padding:14px 12px 24px;}
+.sp-section{margin-bottom:18px;}
+.sp-section-title{font-size:11px; font-weight:800; color:rgba(255,255,255,.7); text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid rgba(255,255,255,.2);}
+.sp-btn{display:block; width:100%; text-align:left; border:1px solid var(--m-border); background:var(--m-surface); color:var(--m-ink); border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:6px; transition:.15s;}
+.sp-btn:hover{border-color:var(--m-accent); color:var(--m-accent-ink); background:var(--m-accent-soft);}
+
+/* "全部 Flow" view toggle sits above the unit/role tree — clears any active
+   per-task filter. Task chips further down (buildTaskChip) act as the other
+   half of the filter: click one to isolate that task's row, click again (or
+   hit 全部 Flow) to go back to seeing everything. */
+.org-view-all{display:block; width:100%; text-align:left; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.08); color:#fff;
+  border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:10px; font-weight:600;}
+.org-view-all:hover{background:rgba(255,255,255,.18);}
+.org-view-all.active{background:#fff; color:var(--sp-bg-dark); border-color:#fff;}
+
+.org-tree{margin-bottom:4px;}
+.org-row{display:flex; align-items:center; gap:4px; padding:4px 2px;}
+.org-toggle{border:none; background:transparent; color:rgba(255,255,255,.7); font-size:10px; width:14px; flex:0 0 14px; padding:0;}
+.org-name{flex:1 1 auto; font-size:12px; font-weight:700; color:#fff; word-break:break-word;}
+.org-role-head .org-name{font-weight:600; font-size:11.5px;}
+.org-del{border:none; background:transparent; color:rgba(255,255,255,.6); font-size:10px; opacity:.5; padding:2px 4px;}
+.org-row:hover .org-del{opacity:1;}
+.org-del:hover{color:#ffb9a8;}
+.org-roles{padding-left:14px; border-left:1px dashed rgba(255,255,255,.3); margin-left:6px;}
+.org-tasks{padding-left:14px; margin-bottom:6px;}
+.org-task-chip{font-size:11px; color:var(--m-ink); background:var(--m-surface); border:1px solid var(--m-border); border-radius:5px; padding:3px 7px; margin:3px 0; cursor:pointer;}
+.org-task-chip:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
+.org-task-chip.active{background:var(--m-accent); border-color:var(--m-accent); color:#fff; font-weight:700;}
+.org-add-btn{display:block; border:1px dashed rgba(255,255,255,.35); background:transparent; color:rgba(255,255,255,.75); font-size:10.5px; border-radius:6px; padding:4px 8px; margin-top:2px; width:100%; text-align:left;}
+.org-add-btn:hover{border-color:#fff; color:#fff; background:rgba(255,255,255,.12);}
+.org-unassigned .org-name{color:rgba(255,255,255,.85); font-style:italic;}
+
+/* small "篩選中：X ✕" pill that shows in the legend bar whenever a task
+   filter is active, so it's obvious why other tasks disappeared even if the
+   side panel is scrolled out of view. */
+.legend-bar .filter-status{display:none; align-items:center; gap:6px; margin-left:auto; background:var(--m-accent); color:#fff; border-radius:6px; padding:3px 6px 3px 10px; font-weight:700;}
+.legend-bar .filter-status.show{display:inline-flex;}
+.filter-clear-btn{border:none; background:rgba(255,255,255,.25); color:#fff; border-radius:50%; width:16px; height:16px; font-size:10px; line-height:16px; padding:0;}
+.filter-clear-btn:hover{background:rgba(255,255,255,.45);}
+.task-tag{font-size:9.5px; color:#fff; background:rgba(255,255,255,.2); border-radius:4px; padding:1px 5px; display:inline-block; align-self:flex-start;}
+
+/* ---------- 教學與範例 modal ----------
+   The 範例 (examples) tab renders through a completely separate, read-only
+   pipeline (own node index, own canvas, zero event listeners) rather than a
+   "locked" flag bolted onto the real interactive renderer — see the
+   EXAMPLES/renderExample() section in the script. It never touches MODEL,
+   so 清空畫布 / 匯出 / 合併匯入 JSON can never affect or be affected by it. */
+/* full window takeover rather than a small centered popup — Jerry found a
+   floating dialog too cramped for browsing an actual flow diagram. */
+.modal-overlay{position:fixed; inset:0; background:var(--surface); z-index:500; display:none;}
+.modal-overlay.open{display:flex;}
+.modal-panel{background:var(--surface); width:100vw; height:100vh; border-radius:0; overflow:hidden;
+  display:flex; flex-direction:column;}
+.modal-header{display:flex; align-items:center; justify-content:space-between; background:var(--tb-bg); padding:0 8px 0 18px; flex:0 0 auto;}
+.modal-tabs{display:flex; gap:4px;}
+.modal-tab{border:none; background:transparent; color:rgba(255,255,255,.75); font-size:13px; font-weight:700; padding:14px 16px; border-bottom:3px solid transparent;}
+.modal-tab:hover{color:#fff;}
+.modal-tab.active{color:#fff; border-bottom-color:#fff;}
+.modal-close{border:none; background:transparent; color:#fff; font-size:16px; width:36px; height:36px; border-radius:8px;}
+.modal-close:hover{background:rgba(255,255,255,.18);}
+.modal-body{flex:1 1 auto; overflow:hidden; position:relative;}
+.modal-tab-content{position:absolute; inset:0; overflow:auto; display:none;}
+.modal-tab-content.active{display:block;}
+
+/* -- 教學 tab: numbered, illustrated step cards -- */
+.tut-wrap{padding:26px 34px; max-width:860px; margin:0 auto;}
+.tut-notice{font-size:12px; color:var(--m-accent-ink); background:var(--m-accent-soft); border:1px solid var(--m-accent); border-radius:8px; padding:10px 14px; margin-bottom:16px; line-height:1.6;}
+.tut-intro{font-size:13px; color:var(--muted); margin-bottom:22px; line-height:1.6;}
+.tut-step{display:flex; gap:16px; padding:18px 0; border-bottom:1px solid var(--border-soft);}
+.tut-step:last-child{border-bottom:none;}
+.tut-num{flex:0 0 30px; height:30px; border-radius:50%; background:var(--m-accent); color:#fff; font-weight:800; font-size:13px;
+  display:flex; align-items:center; justify-content:center;}
+.tut-body{flex:1 1 auto;}
+.tut-title{font-weight:800; font-size:13.5px; margin-bottom:4px;}
+.tut-desc{font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:10px;}
+.tut-fig{background:var(--bg); border:1px solid var(--border-soft); border-radius:10px; padding:12px; display:inline-block;}
+
+/* -- 範例 tab: mirrors the real .main-layout / .side-panel look -- */
+.example-layout{display:flex; height:100%;}
+.example-side{flex:0 0 220px; background:var(--sp-bg); padding:14px 12px; overflow-y:auto;}
+.example-pick{display:block; width:100%; text-align:left; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.08);
+  color:#fff; border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:6px; font-weight:600;}
+.example-pick:hover{background:rgba(255,255,255,.18);}
+.example-pick.active{background:#fff; color:var(--sp-bg-dark); border-color:#fff;}
+.example-readonly-note{font-size:10px; color:rgba(255,255,255,.65); margin:12px 0 4px; line-height:1.5;}
+.example-canvas-scroll{flex:1 1 auto; overflow:auto; background:var(--bg);}
+.example-canvas{position:relative; width:max-content;}
+.node.example-node{pointer-events:none;}
+.node.example-node .node-top-actions, .node.example-node .node-dot{display:none;}
+
+/* ---------- canvas: swimlane grid — one sticky header row of the 6 fixed
+   stages, then one full-width row per task. Every task shares the same
+   stage columns, so the 6 hats only ever get drawn once. ---------- */
+.canvas-scroll{overflow:auto; flex:1 1 auto; height:100%; background:var(--bg);}
+.canvas{position:relative; width:max-content; transform-origin: top left;}
+
+.edge-svg{position:absolute; top:0; left:0; pointer-events:none; overflow:visible; z-index:5;}
+.edge-deco-layer{position:absolute; top:0; left:0; pointer-events:none; z-index:6;}
+
+.stage-header-row{position:sticky; top:0; z-index:30; display:flex; background:var(--surface); border-bottom:1.5px solid var(--border); box-shadow:0 1px 4px rgba(0,0,0,.05);}
+.row-label-spacer{flex:0 0 var(--label-w); width:var(--label-w); border-right:1.5px solid var(--tl-bg-dark); background:var(--tl-bg);
+  display:flex; align-items:center; justify-content:center; padding:6px;}
+.task-add-btn-header{border:1.5px dashed rgba(255,255,255,.4); background:transparent; color:#fff; border-radius:8px; padding:6px 8px; font-size:11px; width:100%;}
+.task-add-btn-header:hover{border-color:#fff; color:#fff; background:rgba(255,255,255,.15);}
+.stage-header-cell{flex:0 0 var(--stage-w); width:var(--stage-w); padding:9px 16px; box-sizing:border-box; border-right:1px solid rgba(0,0,0,.05);}
+.stage-header-cell:last-child{border-right:none;}
+.stage-head-title-row{border-bottom:2px solid var(--stage-color,var(--accent)); padding-bottom:6px; margin-bottom:3px;}
+.stage-num{display:inline-flex; width:19px; height:19px; border-radius:50%; background:var(--stage-color,var(--accent)); color:#fff;
+  font-size:10px; font-weight:800; align-items:center; justify-content:center; margin-right:6px; vertical-align:middle;}
+.stage-title{font-size:13.5px; font-weight:800; vertical-align:middle;}
+.stage-purpose{font-size:11px; color:var(--muted); margin-top:3px; outline:none; padding:2px 3px; border-radius:4px; min-height:14px;}
+.stage-purpose:focus{background:var(--bg); box-shadow:0 0 0 1px var(--accent);}
+.stage-purpose:empty:before{content:'（點此輸入這個階段的說明）'; color:var(--muted-soft);}
+
+.task-row-outer{border-bottom:1px solid rgba(0,0,0,.06);}
+.task-row{display:flex;}
+.task-label{position:sticky; left:0; z-index:20; flex:0 0 var(--label-w); width:var(--label-w); background:var(--tl-bg);
+  border-right:1.5px solid var(--tl-bg-dark); padding:10px 10px; display:flex; flex-direction:column; gap:6px; justify-content:center;}
+.task-name{font-weight:700; font-size:12.5px; outline:none; padding:2px 3px; border-radius:4px; word-break:break-word; line-height:1.35; color:#fff;}
+.task-name[contenteditable="true"]{background:rgba(255,255,255,.18); box-shadow:0 0 0 1px #fff;}
+.task-row-actions{display:flex; gap:2px; align-items:center;}
+.task-mini-btn{border:none; background:transparent; color:rgba(255,255,255,.75); font-size:11px; padding:2px 4px; border-radius:4px;}
+.task-mini-btn:hover{background:rgba(255,255,255,.18); color:#fff;}
+.task-mini-btn.del:hover{color:#ffb9a8; background:rgba(255,255,255,.18);}
+.task-empty-hint{display:flex; gap:4px; margin-top:2px;}
+.task-empty-hint button{border:1px solid rgba(255,255,255,.4); background:rgba(255,255,255,.08); border-radius:6px; padding:3px 6px; font-size:10.5px; color:#fff;}
+.task-empty-hint button:hover{border-color:#fff; background:rgba(255,255,255,.18);}
+
+.task-canvas-wrap{position:relative; flex:1 1 auto;}
+.task-bg-bands{position:absolute; inset:0; display:flex; pointer-events:none; z-index:0;}
+.task-bg-band{flex:0 0 var(--stage-w); width:var(--stage-w); border-right:1px solid rgba(0,0,0,.035);}
+.task-track{position:relative; min-height:150px; z-index:1;}
+.task-row-outer.collapsed .task-canvas-wrap{display:none;}
+.task-row-outer.collapsed .task-meta-panel{display:none;}
+
+.task-meta-panel{display:none; flex-wrap:wrap; gap:0; padding:10px calc(var(--label-w) + 4px) 12px 10px; background:var(--bg); border-top:1px dashed rgba(0,0,0,.1);}
+.task-meta-panel.open{display:flex;}
+.task-meta-col{flex:0 0 260px; width:260px; box-sizing:border-box; padding:0 8px; margin-bottom:8px;}
+.task-meta-col h6{font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted-soft); margin:0 0 4px; border-bottom:1px solid var(--border-soft); padding-bottom:3px;}
+.task-meta-col label{font-size:9.5px; color:var(--muted-soft); display:block; margin:5px 0 2px;}
+.task-meta-col textarea{width:100%; border:1px solid var(--border-soft); border-radius:5px; padding:4px 6px; font-size:10.5px; min-height:32px; resize:vertical; background:#fff;}
+
+/* ---------- nodes ---------- */
+.node{position:absolute; user-select:none;}
+.node.step{width:162px; min-height:56px;}
+.node.step .node-body{position:relative; background:var(--rect-bg); border:1.5px solid var(--rect-border); border-radius:9px;
+  padding:7px 10px; min-height:56px; display:flex; flex-direction:column; justify-content:center; gap:2px; box-shadow:var(--shadow);}
+.node.decision{width:152px; min-height:120px;}
+.node.decision .diamond-bg{position:absolute; inset:0; background:var(--dia-bg); border:1.5px solid var(--dia-border);
+  clip-path:polygon(50% 2%, 98% 50%, 50% 98%, 2% 50%);}
+.node.decision .node-body{position:relative; min-height:120px; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:2px; padding:30px 34px; text-align:center;}
+.node-title{outline:none; font-size:11.5px; font-weight:700; line-height:1.3; text-align:center; word-break:break-word;}
+.node-title:empty:before{content:attr(data-placeholder); color:var(--muted-soft); font-weight:400;}
+.node-owner{outline:none; font-size:9.5px; font-weight:600; color:var(--accent-ink,var(--accent)); line-height:1.3; text-align:center; word-break:break-word; margin-top:1px;}
+.node-owner:empty:before{content:'當下角色…'; color:var(--muted-soft); font-weight:400;}
+.node-desc{outline:none; font-size:10px; color:var(--muted); line-height:1.3; text-align:center; word-break:break-word; margin-top:1px;}
+.node-desc:empty:before{content:'描述（選填）…'; color:var(--muted-soft);}
+
+.node.dragging{opacity:.85; z-index:20;}
+.node.connecting{z-index:20;}
+.node.connect-target .node-body,
+.node.connect-target .diamond-bg{outline:2.5px solid var(--accent); outline-offset:2px;}
+
+/* ---------- single top icon cluster: add step / add decision / delete ----------
+   Only one location (above the node) instead of icons on all four sides —
+   less visual noise. New nodes always spawn to the right (boxes are
+   draggable anyway, so the exact spot doesn't matter) and are NOT
+   auto-connected — creating and connecting are separate actions now. */
+.node-top-actions{position:absolute; top:-42px; left:50%; width:130px; height:42px; transform:translateX(-50%);
+  display:flex; justify-content:center; align-items:flex-start; gap:5px; opacity:0; transition:opacity .1s; z-index:8; pointer-events:auto;}
+.node:hover .node-top-actions, .node-top-actions:hover{opacity:1;}
+.top-action-btn{position:relative; width:24px; height:24px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:11px; padding:0;
+  line-height:22px; box-shadow:var(--shadow); color:var(--rect-border);}
+.top-action-btn.dec{color:var(--dia-border);}
+.top-action-btn.del{color:var(--red);}
+.top-action-btn:hover{background:var(--accent); color:#fff; border-color:var(--accent);}
+.top-action-btn.del:hover{background:var(--red); border-color:var(--red);}
+.top-action-btn::after{
+  content:attr(data-tip); position:absolute; bottom:125%; left:50%; transform:translateX(-50%);
+  background:#26282f; color:#fff; font-size:9.5px; padding:3px 7px; border-radius:5px; white-space:nowrap;
+  opacity:0; pointer-events:none; transition:opacity .08s; z-index:20;}
+.top-action-btn:hover::after{opacity:1;}
+
+/* ---------- connector dots: dedicated line-drawing handles on all 4 sides ---------- */
+.node-dot{position:absolute; width:12px; height:12px; border-radius:50%; background:var(--accent); border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.1); opacity:0; transition:opacity .1s, transform .1s; cursor:crosshair; z-index:7;}
+.node:hover .node-dot{opacity:1;}
+.node-dot:hover{transform:scale(1.35);}
+.node-dot.dot-top{top:-6px; left:50%; transform:translateX(-50%);}
+.node-dot.dot-top:hover{transform:translateX(-50%) scale(1.35);}
+.node-dot.dot-bottom{bottom:-6px; left:50%; transform:translateX(-50%);}
+.node-dot.dot-bottom:hover{transform:translateX(-50%) scale(1.35);}
+.node-dot.dot-left{left:-6px; top:50%; transform:translateY(-50%);}
+.node-dot.dot-left:hover{transform:translateY(-50%) scale(1.35);}
+.node-dot.dot-right{right:-6px; top:50%; transform:translateY(-50%);}
+.node-dot.dot-right:hover{transform:translateY(-50%) scale(1.35);}
+
+/* ---------- edge decorations ----------
+   Meaningful (non-empty) labels stay visible so real info (Yes/No, rollback
+   reason) isn't hidden; the edit/toggle/delete icon buttons and the empty
+   "＋標籤" placeholder only appear once you hover the line. ---------- */
+.edge-deco{position:absolute; pointer-events:none; display:flex; align-items:center; gap:3px; transform:translate(-50%,-50%); z-index:6;}
+.edge-label{background:#fff; border:1px solid var(--border); border-radius:6px; padding:2px 6px; font-size:10.5px; color:var(--ink); white-space:nowrap;
+  box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .1s;}
+.edge-label.filled{opacity:1; pointer-events:auto;}
+.edge-deco.show .edge-label{opacity:1; pointer-events:auto;}
+.edge-label:empty:before{content:'＋標籤'; color:var(--muted-soft);}
+.edge-label.dashed-label{border-color:var(--red-soft); color:var(--red);}
+.edge-btn{width:16px; height:16px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:9px; padding:0; line-height:14px; box-shadow:var(--shadow);
+  opacity:0; pointer-events:none; transition:opacity .1s;}
+.edge-deco.show .edge-btn{opacity:1; pointer-events:auto;}
+.edge-btn.del:hover{color:var(--red); border-color:var(--red-soft); background:var(--red-soft);}
+.edge-btn.toggle.active{background:var(--red-soft); color:var(--red); border-color:#f2c9c4;}
+
+/* handles shown only on the currently-SELECTED edge: two small circles at its
+   actual endpoints (drag onto a different node to reconnect that end), and
+   a small pill on its bend corridor (drag along the corridor's axis to
+   nudge it away from an overlapping neighbour). */
+.edge-endpoint-handle{position:absolute; width:14px; height:14px; border-radius:50%; background:#fff;
+  border:2.5px solid var(--accent); transform:translate(-50%,-50%); cursor:crosshair; pointer-events:auto; z-index:7;
+  box-shadow:0 0 0 3px rgba(94,106,210,.22);}
+.edge-endpoint-handle:hover{background:var(--accent);}
+.edge-bend-handle{position:absolute; width:22px; height:22px; border-radius:7px; background:var(--accent);
+  color:#fff; font-size:13px; font-weight:700; line-height:22px; text-align:center;
+  border:2px solid #fff; transform:translate(-50%,-50%); pointer-events:auto; z-index:9;
+  box-shadow:0 1px 4px rgba(16,24,40,.35);}
+.edge-bend-handle:hover{background:var(--accent-ink);}
+.edge-bend-handle.axis-y{cursor:ns-resize;}
+.edge-bend-handle.axis-x{cursor:ew-resize;}
+
+@media print{ .toolbar,.legend-bar{display:none;} }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div class="brand"><span class="dot"></span> Flow 繪製工具</div>
+  <div class="tb-right">
+    <button class="tbtn" id="openHelpModalBtn">教學與範例</button>
+    <div class="export-dropdown" id="exportDropdown">
+      <button class="tbtn primary" id="exportMenuBtn">Export ▾</button>
+      <div class="export-menu" id="exportMenu">
+        <button class="export-item" id="exportMdBtn">匯出 Markdown</button>
+        <button class="export-item" id="exportJsonBtn">匯出 JSON</button>
+        <button class="export-item filebtn">匯入 JSON（取代整份）<input type="file" id="importJsonInput" accept=".json,application/json"></button>
+        <button class="export-item filebtn" title="把其他人回填的 JSON 檔彙整進這份大表，不會覆蓋現有內容">合併匯入 JSON（彙整多人）<input type="file" id="mergeImportInput" accept=".json,application/json"></button>
+        <div class="export-menu-sep"></div>
+        <button class="export-item" id="cloudSaveBtn" title="存到伺服器，之後主管可從彙整檢視頁看到；換裝置/瀏覽器也能讀回來">☁️ 雲端存檔</button>
+        <button class="export-item" id="cloudLoadBtn" title="從伺服器讀回你上次的雲端存檔（用姓名/單位/角色比對）">☁️ 雲端讀取我的資料</button>
+        <button class="export-item" id="reloadStagesBtn" title="如果你的單位主管剛剛更新了帽子設定，點這裡立刻套用，不用重新整理網頁">🔄 重新載入帽子設定</button>
+        <div class="export-menu-sep"></div>
+        <button class="export-item danger" id="resetBtn">清空畫布</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 雲端存讀的身份識別：只在第一次使用、或按了「雲端存檔/讀取」但還沒填過時彈出。
+     填過一次後存在瀏覽器的 localStorage，之後不會再問（除非清瀏覽器資料或換裝置）。 -->
+<div class="tiny-modal-overlay" id="identityModal">
+  <div class="tiny-modal-card">
+    <h3>雲端存讀 — 你是誰？</h3>
+    <p class="tiny-modal-desc">填一次即可，之後這台裝置這個瀏覽器都會記住。之後主管看到彙整畫面時，會用這裡填的姓名/單位/角色標示是誰填的。</p>
+    <label>姓名</label>
+    <input type="text" id="identityNameInput" placeholder="例如：王小明" />
+    <label>單位</label>
+    <input type="text" id="identityUnitInput" placeholder="例如：Div4" list="identityUnitList" />
+    <datalist id="identityUnitList"></datalist>
+    <label>角色</label>
+    <input type="text" id="identityRoleInput" placeholder="例如：UI / UX / PM" list="identityRoleList" />
+    <datalist id="identityRoleList"></datalist>
+    <div class="tiny-modal-actions">
+      <button class="tm-secondary" id="identityCancelBtn">取消</button>
+      <button class="tm-primary" id="identityConfirmBtn">確認</button>
+    </div>
+  </div>
+</div>
+<div class="legend-bar">
+  <span><span class="leg-box" style="background:var(--rect-bg); border:1.5px solid var(--rect-border);"></span> 方形＝步驟（含名稱＋描述）</span>
+  <span><span class="leg-dia" style="background:var(--dia-bg); border:1.5px solid var(--dia-border);"></span> 菱形＝判斷</span>
+  <span><span class="leg-line"></span> 一般連線</span>
+  <span><span class="leg-line dashed"></span> 退回 / Rollback 連線</span>
+  <span class="filter-status" id="filterStatus"></span>
+</div>
+
+<div class="main-layout">
+  <div class="side-panel" id="sidePanel">
+    <div class="sp-section">
+      <div class="sp-section-title">組織結構</div>
+      <div class="org-tree" id="orgTree"></div>
+      <button class="org-add-btn" id="addUnitBtn">＋ 新增單位</button>
+    </div>
+    <div class="sp-section">
+      <div class="sp-section-title">顯示</div>
+      <div class="zoomgroup">
+        <button id="zoomOut">−</button>
+        <div class="zlabel" id="zoomLabel">100%</div>
+        <button id="zoomIn">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="canvas-scroll" id="canvasScroll">
+    <div class="canvas" id="canvas">
+      <svg class="edge-svg" id="edgeSvg"></svg>
+      <div class="edge-deco-layer" id="edgeDeco"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="helpModal">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <div class="modal-tabs">
+        <button class="modal-tab active" data-tab="tutorial">教學</button>
+        <button class="modal-tab" data-tab="examples">範例</button>
+      </div>
+      <button class="modal-close" id="closeHelpModal">✕</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="modal-tab-content active" id="tutorialTab">
+        <div class="tut-wrap">
+          <div class="tut-notice">此工具是快速幫大家繪製工作流的 Beta 版，在拉線時難免有繞圈、彎曲的問題，可以自行拖曳各方框之間的距離來調整。</div>
+          <div class="tut-intro">這份工具的核心操作只有五步：先建立單位／角色歸屬、再新增任務與步驟、拖曳圓點畫線、點選連線編輯、最後匯出。以下用簡圖示範。</div>
+
+          <div class="tut-step">
+            <div class="tut-num">1</div>
+            <div class="tut-body">
+              <div class="tut-title">先到左側建立「單位 → 角色」歸屬</div>
+              <div class="tut-desc">開始畫之前，先在左側組織結構按「＋新增單位」（例如你的部門），再在單位下按「＋新增角色」（例如你的職能）。之後每個任務都會歸在某個角色底下，方便篩選、也方便之後多人彙整時自動歸類。</div>
+              <div class="tut-fig"><svg viewBox="0 0 300 92" width="300" height="92">
+                <rect x="4" y="4" width="140" height="84" rx="8" fill="#8a7a6d"/>
+                <text x="14" y="22" font-size="9" font-weight="700" fill="#fff">Marketing</text>
+                <text x="24" y="38" font-size="9" fill="#fff">PM</text>
+                <rect x="20" y="44" width="90" height="14" rx="6" fill="#fff" stroke="none"/>
+                <text x="26" y="54" font-size="8" fill="#4a4238">＋ 新增任務</text>
+                <rect x="10" y="64" width="80" height="14" rx="6" fill="rgba(255,255,255,.15)"/>
+                <text x="16" y="74" font-size="8" fill="#fff">＋ 新增角色</text>
+                <path d="M148,46 L182,46" stroke="#a6877a" stroke-width="2"/><polygon points="182,46 174,42 174,50" fill="#a6877a"/>
+                <rect x="186" y="18" width="108" height="56" rx="8" fill="#f6f4f1" stroke="#d6cec1"/>
+                <text x="196" y="34" font-size="8" fill="#4a4238">Marketing / PM</text>
+                <text x="196" y="50" font-size="9" font-weight="700" fill="#4a4238">Banner</text>
+                <text x="196" y="64" font-size="7.5" fill="#8f8374">任務自動標記單位/角色</text>
+              </svg></div>
+            </div>
+          </div>
+
+          <div class="tut-step">
+            <div class="tut-num">2</div>
+            <div class="tut-body">
+              <div class="tut-title">在角色下方新增任務、新增步驟／判斷節點</div>
+              <div class="tut-desc">在角色下方按「＋新增任務」，會新增一列橫貫六個階段的 flow；節點滑鼠移上去會浮出頂部小圖示，可以再新增步驟（方形）或判斷（菱形），或刪除。</div>
+              <div class="tut-fig"><svg viewBox="0 0 300 92" width="300" height="92">
+                <rect x="4" y="34" width="88" height="24" rx="6" fill="#fff" stroke="#d6cec1"/>
+                <text x="48" y="50" font-size="10" text-anchor="middle" fill="#4a4238">＋ 新增任務</text>
+                <path d="M94,46 L126,46" stroke="#a6877a" stroke-width="2"/><polygon points="126,46 118,42 118,50" fill="#a6877a"/>
+                <rect x="132" y="4" width="164" height="84" rx="6" fill="#f6f4f1" stroke="#d6cec1"/>
+                <rect x="140" y="16" width="46" height="18" rx="4" fill="#eef2ff" stroke="#5e6ad2"/>
+                <text x="163" y="28" font-size="8" text-anchor="middle" fill="#4547a9">步驟</text>
+                <polygon points="216,10 238,25 216,40 194,25" fill="#fff7e6" stroke="#d9a441"/>
+                <text x="216" y="28" font-size="8" text-anchor="middle" fill="#8a6c60">判斷</text>
+                <rect x="140" y="52" width="46" height="18" rx="4" fill="#fdecea" stroke="#c0392b" stroke-dasharray="3,2"/>
+                <text x="163" y="64" font-size="8" text-anchor="middle" fill="#c0392b">刪除</text>
+                <text x="255" y="70" font-size="8" fill="#8f8374">↑ 節點上方浮出的小圖示</text>
+              </svg></div>
+            </div>
+          </div>
+
+          <div class="tut-step">
+            <div class="tut-num">3</div>
+            <div class="tut-body">
+              <div class="tut-title">拖曳四邊圓點畫連接線</div>
+              <div class="tut-desc">滑鼠移到節點上會顯示四邊的小圓點，從一個圓點按住拖到另一個節點上放開，就會畫出連接線；線會自動轉直角避開節點，不會用拖曳的話直接穿過去。</div>
+              <div class="tut-fig"><svg viewBox="0 0 300 80" width="300" height="80">
+                <rect x="10" y="26" width="70" height="28" rx="6" fill="#eef2ff" stroke="#5e6ad2"/>
+                <circle cx="80" cy="40" r="4" fill="#5e6ad2"/>
+                <path d="M84,40 C130,40 150,40 190,40" stroke="#8a8f9c" stroke-width="2" fill="none"/>
+                <polygon points="196,40 186,36 186,44" fill="#8a8f9c"/>
+                <circle cx="196" cy="40" r="4" fill="#5e6ad2"/>
+                <rect x="200" y="26" width="70" height="28" rx="6" fill="#eef2ff" stroke="#5e6ad2"/>
+                <text x="45" y="18" font-size="8" text-anchor="middle" fill="#8f8374">節點 A</text>
+                <text x="235" y="18" font-size="8" text-anchor="middle" fill="#8f8374">節點 B</text>
+                <text x="140" y="70" font-size="8" text-anchor="middle" fill="#8f8374">從圓點拖到另一個節點上放開</text>
+              </svg></div>
+            </div>
+          </div>
+
+          <div class="tut-step">
+            <div class="tut-num">4</div>
+            <div class="tut-body">
+              <div class="tut-title">點一下連接線可以編輯</div>
+              <div class="tut-desc">連接線本身不用 hover，點一下即可選取（再點一次取消選取）。選取後會出現：標籤（可打字，例如 Yes / No / 退回原因）、⟲切換一般線／退回虛線、✕刪除、兩端的圓形把手（拖到別的節點可重新連接）、中間的方形把手（拖曳可調整繞路位置，避免線疊在一起）。</div>
+              <div class="tut-fig"><svg viewBox="0 0 300 96" width="300" height="96">
+                <rect x="10" y="34" width="66" height="26" rx="6" fill="#eef2ff" stroke="#5e6ad2"/>
+                <rect x="224" y="34" width="66" height="26" rx="6" fill="#eef2ff" stroke="#5e6ad2"/>
+                <path d="M76,47 L224,47" stroke="#5e6ad2" stroke-width="3" fill="none"/>
+                <polygon points="224,47 212,42 212,52" fill="#5e6ad2"/>
+                <circle cx="76" cy="47" r="5" fill="#fff" stroke="#5e6ad2" stroke-width="2.5"/>
+                <circle cx="224" cy="47" r="5" fill="#fff" stroke="#5e6ad2" stroke-width="2.5"/>
+                <rect x="126" y="8" width="22" height="22" rx="7" fill="#5e6ad2"/>
+                <text x="137" y="23" font-size="11" text-anchor="middle" fill="#fff">↕</text>
+                <rect x="118" y="58" width="34" height="16" rx="8" fill="#fff" stroke="#d6cec1"/>
+                <text x="135" y="69" font-size="8" text-anchor="middle" fill="#4a4238">Yes</text>
+                <circle cx="160" cy="66" r="8" fill="#fff" stroke="#d6cec1"/>
+                <text x="160" y="69" font-size="8" text-anchor="middle" fill="#8a6c60">⟲</text>
+                <circle cx="180" cy="66" r="8" fill="#fff" stroke="#d6cec1"/>
+                <text x="180" y="69" font-size="8" text-anchor="middle" fill="#b3695a">✕</text>
+                <text x="150" y="90" font-size="8" text-anchor="middle" fill="#8f8374">選取後才會出現的編輯把手／按鈕</text>
+              </svg></div>
+            </div>
+          </div>
+
+          <div class="tut-step">
+            <div class="tut-num">5</div>
+            <div class="tut-body">
+              <div class="tut-title">用右上角 Export 匯出／匯入</div>
+              <div class="tut-desc">畫好後從右上角「Export ▾」匯出 Markdown 或 JSON；多人分頭畫好後，各自匯出 JSON 交回給你，你用「合併匯入 JSON」逐個彙整進同一份大表，不會覆蓋你已經有的內容。左側任務名稱旁的單位/角色標籤也可以點一下，只看該任務的 flow。</div>
+              <div class="tut-fig"><svg viewBox="0 0 300 90" width="300" height="90">
+                <rect x="220" y="6" width="70" height="24" rx="6" fill="#a6877a"/>
+                <text x="255" y="22" font-size="9" text-anchor="middle" fill="#fff">Export ▾</text>
+                <rect x="180" y="34" width="110" height="52" rx="8" fill="#fff" stroke="#d6cec1"/>
+                <text x="190" y="48" font-size="8" fill="#4a4238">匯出 Markdown</text>
+                <text x="190" y="60" font-size="8" fill="#4a4238">匯出／匯入 JSON</text>
+                <text x="190" y="72" font-size="8" fill="#4a4238">合併匯入 JSON</text>
+                <rect x="4" y="6" width="90" height="70" rx="8" fill="#8a7a6d"/>
+                <text x="49" y="20" font-size="8" text-anchor="middle" fill="#fff">組織結構</text>
+                <text x="49" y="36" font-size="8" text-anchor="middle" fill="#fff">單位 → 角色</text>
+                <text x="49" y="50" font-size="8" text-anchor="middle" fill="#fff">→ 任務</text>
+                <text x="49" y="66" font-size="7.5" text-anchor="middle" fill="#fff">點任務可篩選</text>
+              </svg></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-tab-content" id="examplesTab">
+        <div class="example-layout">
+          <div class="example-side">
+            <button class="example-pick active" data-example="ui">UI Workflow</button>
+            <button class="example-pick" data-example="ux">UX Workflow Lifecycle</button>
+            <div class="sp-section-title" style="margin-top:14px;">組織結構</div>
+            <div class="org-tree" id="exampleOrgTree"></div>
+            <div class="example-readonly-note">範例僅供參考瀏覽，不可編輯，也不會影響你自己的畫布內容。</div>
+          </div>
+          <div class="example-canvas-scroll" id="exampleCanvasScroll">
+            <div class="example-canvas" id="exampleCanvas">
+              <svg id="exampleEdgeSvg" style="position:absolute; top:0; left:0; overflow:visible;"></svg>
+              <div id="exampleEdgeDeco" style="position:absolute; top:0; left:0; pointer-events:none;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   0. CONSTANTS
+   ========================================================================= */
+/* 雲端存讀設定 —— 部署到自己的 Supabase 專案後，把這兩個值換成專案的
+   Project URL 和 anon public key（Supabase 後台 Settings > API 可以找到）。
+   留空的話雲端存檔/讀取按鈕仍會顯示，但點下去會提示「尚未設定雲端連線」，
+   其餘本機功能（畫圖、匯出JSON/Markdown、合併匯入）完全不受影響 —— 這兩個
+   設定值只影響「雲端存檔」「雲端讀取我的資料」這兩個新按鈕。詳細建置步驟見
+   SETUP.md。 */
+const SUPABASE_URL = 'https://tksolsqxthxlfdoocqtg.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_BHFnVC2x70HOwgJgw6MULg_DyT6ACJq';
+const supabaseClient = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+/* 帽子（6階段schema）— 這是離線/尚未套用任何雲端單位設定時的內建預設值，
+   跟jerry原本手刻的6個階段完全一樣。一旦使用者的身份識別出「單位」且該單位
+   在雲端有自訂帽子，STAGE_DEFS 會被 loadUnitStagesFor() 整個換掉（見下方）
+   ——所以這裡故意用 let 而不是 const。一般員工完全沒有編輯這份清單的UI，
+   只有透過 manager-view.html 的單位PIN才能改（見那個檔案）。 */
+const DEFAULT_STAGE_DEFS = [
+  { id:'request_collection',  title:'Request Collection',   color:'#e57373' },
+  { id:'research_evaluation', title:'Research / Evaluation', color:'#f2a54a' },
+  { id:'execution',           title:'Execution',             color:'#e0c23c' },
+  { id:'review',               title:'Review',                color:'#5cb85c' },
+  { id:'delivery',              title:'Delivery',              color:'#4aa3d1' },
+  { id:'go_live',               title:'Go Live',               color:'#7a7ad1' },
+];
+let STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s}));
+const STAGE_WIDTH = 620, LABEL_WIDTH = 150;
+const RECT_W = 162, RECT_H = 56, DIA_W = 152, DIA_H = 120;
+let uidCounter = 1;
+function uid(prefix){ return prefix + (uidCounter++); }
+/* Whatever is CURRENTLY configured (STAGE_DEFS) plus any stageId still
+   referenced by existing MODEL data but missing from that list — this can
+   happen if a manager removes/renames a hat (by id) AFTER some nodes were
+   already tagged with the old one, e.g. via 合併匯入JSON from someone still
+   using the previous hat set, or a hat that existed briefly and got deleted.
+   Used only by the code that decides which COLUMNS to actually render
+   (header row, per-task background bands, a node's border colour) — never
+   by code that's about "what hats exist to create something new against"
+   (those should keep using STAGE_DEFS directly), so a removed hat's old data
+   stays visible instead of silently vanishing, but nobody can add anything
+   new to it going forward. */
+function effectiveStageDefs(){
+  const known = new Set(STAGE_DEFS.map(s=>s.id));
+  const orphanIds = [];
+  MODEL.tasks.forEach(t=> t.nodes.forEach(n=>{
+    if(n.stageId && !known.has(n.stageId) && !orphanIds.includes(n.stageId)) orphanIds.push(n.stageId);
+  }));
+  if(!orphanIds.length) return STAGE_DEFS;
+  return STAGE_DEFS.concat(orphanIds.map(id=>({ id, title:'（已移除的帽子）', color:'#9aa0a6' })));
+}
+/* Normalizes a unit/role name for storage and for merge-matching: trims
+   stray whitespace and forces any English letters to uppercase (CJK
+   characters pass through toUpperCase() unchanged, so this is safe to apply
+   unconditionally). This only fixes CASE inconsistency between contributors
+   (e.g. "Div4" vs "div4" vs "DIV4" all become "DIV4") — it does NOT solve two
+   people using genuinely different names for the same real unit (e.g. "Div4"
+   vs "第四事業群"), which still requires a human glance after merging. */
+function normalizeOrgName(s){ return (s||'').trim().toUpperCase(); }
+function tint(hex, alpha){
+  const c = hex.replace('#','');
+  const r = parseInt(c.substring(0,2),16), g = parseInt(c.substring(2,4),16), b = parseInt(c.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* =========================================================================
+   1. DATA MODEL — flat, global task list. Every task is one horizontal lane
+   that runs across the SAME six stage columns, so the six hats only ever
+   get defined once (no more re-declaring them per task).
+   model = { name, stagePurpose:{stageId:text}, tasks:[ {id,name,collapsed,stageMeta:{stageId:{entry,decision,exit,deliverables}}, nodes:[{id,type,label,note,x,y}]} ], edges:[{id,from,to,label,dashed}] }
+   node.x is a GLOBAL x-coordinate shared by every task's lane (0 = start of stage 1); node.y is local to that task's own lane height.
+   ========================================================================= */
+function blankModel(){
+  const stagePurpose = {};
+  STAGE_DEFS.forEach(s => stagePurpose[s.id] = '');
+  return { name:'未命名 Flow', stagePurpose, units:[], tasks:[], edges:[] };
+}
+function emptyStageMeta(){
+  const m = {};
+  STAGE_DEFS.forEach(s => m[s.id] = { entry:'', decision:'', exit:'', deliverables:'' });
+  return m;
+}
+/* unitId/roleId are optional org-structure tags (see ORG TREE section below) —
+   a task can be left ungrouped (both null), which is the default for anything
+   created via the old "＋新增任務" header button or a preset. */
+function newTask(name, unitId, roleId){
+  return { id: uid('t'), name: name || '新任務', collapsed:false, unitId: unitId||null, roleId: roleId||null, stageMeta: emptyStageMeta(), nodes: [] };
+}
+function newNode(type, label, stageId, x, y, note, owner){
+  return { id: uid('n'), type, label: label||'', owner: owner||'', note: note||'', stageId, x: x!=null?x:20, y: y!=null?y:20 };
+}
+/* legacy nodes (imported JSON saved before stage-tagging existed) only carry a GLOBAL x;
+   derive which stage they must have been in and convert x to a LOCAL offset within that stage. */
+function ensureNodeStage(n){
+  if(n.stageId) return;
+  const idx = Math.min(STAGE_DEFS.length-1, Math.max(0, Math.floor((n.x||0) / STAGE_WIDTH)));
+  n.stageId = STAGE_DEFS[idx].id;
+  n.x = (n.x||0) - idx*STAGE_WIDTH;
+}
+/* place a standard Entry -> Decision -> Deliverable 3-node cluster inside stage index `stageIndex`'s column.
+   The x offsets below are LOCAL to that stage's own column, not global canvas coordinates. */
+function stageSegment(task, stageIndex, entryLabel, decisionLabel, deliverableLabel, forwardEdgeLabel){
+  const stageId = STAGE_DEFS[stageIndex].id;
+  const n1 = newNode('step', entryLabel, stageId, 20, 34);
+  const n2 = newNode('decision', decisionLabel, stageId, 220, 12);
+  const n3 = newNode('step', deliverableLabel, stageId, 420, 34);
+  task.nodes.push(n1, n2, n3);
+  return { entry:n1, decision:n2, deliverable:n3,
+    edges:[ {from:n1.id, to:n2.id, fromSide:'right', toSide:'left', label:'', dashed:false},
+            {from:n2.id, to:n3.id, fromSide:'right', toSide:'left', label:forwardEdgeLabel||'Yes', dashed:false} ] };
+}
+
+/* =========================================================================
+   2. PRESETS — converted from ux-workflow-lifecycle2.md and the UI workflow reference.
+   Each preset is now a SINGLE task whose lane runs continuously across all
+   six stage columns (with explicit forward edges chaining the columns
+   together), matching how a real department's flow would be drawn.
+   ========================================================================= */
+function buildPresetUX(){
+  const m = blankModel(); m.name = 'UX Workflow Lifecycle';
+  const task = newTask('UX 主流程');
+  m.tasks.push(task);
+  const edges = [];
+  const seg = {};
+  let prevSeg = null;
+
+  const plan = [
+    { id:'request_collection', entry:'PM/需求單位提出需求', decision:'需求/目標/對象/範圍是否明確？', deliver:'Requirement Brief 簽核', fwd:'Yes',
+      purpose:'理解需求後才開始任何設計工作',
+      meta:{ entry:'A new request, ticket, or business need has been submitted (Jira, email, Slack, or a meeting).',
+        decision:'Is the request clear?\nIs the business goal defined?\nIs the target user identified?\nIs the UX scope confirmed?\nIs additional clarification needed?',
+        exit:'Requirement Brief is confirmed and signed off; scope and success metrics are documented.',
+        deliverables:'No UX deliverables (Requirement Brief 簽核)' } },
+    { id:'research_evaluation', entry:'收到 Requirement Brief', decision:'證據是否足夠？是否需額外研究？', deliver:'UX Study + Research Findings', fwd:'Yes / 足夠',
+      purpose:'在提出方案前，先蒐集證據並評估現況',
+      meta:{ entry:'Requirement Brief and Intake Summary have been received from Request Collection.',
+        decision:'Is the problem definition complete?\nDo we already have enough evidence?\nAre assumptions validated?\nIs additional research required?',
+        exit:'Problem definition is validated with evidence; UX Strategy is agreed by the team.',
+        deliverables:'UX Study：Competitive Analysis, Data Analysis(NPS/CrazyEgg/GA), User Research, User Journey\nResearch Findings：Insights, Problem Definition, Recommendations' } },
+    { id:'execution', entry:'UX Strategy 已核准', decision:'是否需要設計規劃 / 概念驗證 / 可用性測試？', deliver:'Wireframe + UX Spec 完成並與RD驗證', fwd:'Yes',
+      purpose:'把研究結論轉換成具體 UX 解法',
+      meta:{ entry:'UX Strategy is approved from Research / Evaluation.',
+        decision:'Is UX design planning needed?\nNeed concept validation?\nNeed usability testing?',
+        exit:'Wireframe / Flow and UX Spec are complete and technically validated with RD.',
+        deliverables:'UX Design：Information Architecture, User Flow, Wireframe\nUX Specification：UX Spec, ADA Mark\nAccessibility Materials：Guidelines, Training Materials' } },
+    { id:'review', entry:'UX Spec / Wireframe 待審查', decision:'主管 / 利害關係人是否核准？', deliver:'Final UX 核准，無待解決意見', fwd:'Yes',
+      purpose:'交付前先驗證與優化解法',
+      meta:{ entry:'UX Spec and Wireframe / Flow are ready for review.',
+        decision:'Manager approved?\nStakeholder approved?',
+        exit:'Final UX is approved by stakeholders with no open review comments.',
+        deliverables:'Reviewed UX Design：Updated Wireframe, WCAG 2.2 AA' } },
+    { id:'delivery', entry:'Final UX / Spec 已核准', decision:'交付文件是否完整正確？', deliver:'Handoff Documents 交付並被需求方接受', fwd:'Yes',
+      purpose:'將核准的 UX 產出交付給需求方',
+      meta:{ entry:'Final UX and Updated UX Spec are approved by stakeholders.',
+        decision:'Is the handoff documentation complete and accurate?\nIs any required delivery information missing?',
+        exit:'Handoff Documents are complete and accepted by the requester, with no missing information.',
+        deliverables:'UX Handoff Package：Final UX Spec(Wireframe, User Flow), ADA Mark\nAccessibility Materials：Guidelines, Training Materials' } },
+    { id:'go_live', entry:'開發完成待 UAT', decision:'Design QA / UAT 是否通過？', deliver:'功能上線，指標追蹤中', fwd:'Yes',
+      purpose:'支援 UAT、驗證實作品質、上線後追蹤',
+      meta:{ entry:'Development complete and ready for UAT / Text-only or compliance fix, no development required, ready for UAT.',
+        decision:'Did the build pass Design QA and UAT?',
+        exit:'Feature is live, no blocking production issues, success metrics are being tracked.',
+        deliverables:'No UX deliverables (持續追蹤 issue report)' } },
+  ];
+
+  plan.forEach((p, i)=>{
+    const s = stageSegment(task, i, p.entry, p.decision, p.deliver, p.fwd);
+    seg[p.id] = s;
+    edges.push(...s.edges);
+    task.stageMeta[p.id] = p.meta;
+    m.stagePurpose[p.id] = p.purpose;
+    if(prevSeg) edges.push({ from:prevSeg.deliverable.id, to:s.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+    prevSeg = s;
+  });
+
+  edges.push({ from:seg.research_evaluation.decision.id, to:seg.request_collection.deliverable.id, fromSide:'left', toSide:'right', label:'需求其實不清楚 → 退回', dashed:true });
+  edges.push({ from:seg.execution.decision.id, to:seg.research_evaluation.deliverable.id, fromSide:'left', toSide:'right', label:'出現新技術限制或證據 → 退回', dashed:true });
+  edges.push({ from:seg.review.decision.id, to:seg.execution.deliverable.id, fromSide:'left', toSide:'right', label:'審查未過(可用性/品質/設計系統) → 退回', dashed:true });
+  edges.push({ from:seg.review.decision.id, to:seg.request_collection.deliverable.id, fromSide:'bottom', toSide:'bottom', label:'審查期間需求/範圍變更 → 退回', dashed:true });
+  edges.push({ from:seg.delivery.decision.id, to:seg.execution.deliverable.id, fromSide:'bottom', toSide:'bottom', label:'缺件 → 退回補齊', dashed:true });
+  edges.push({ from:seg.go_live.decision.id, to:seg.review.deliverable.id, fromSide:'bottom', toSide:'bottom', label:'QA/UAT 失敗屬設計或需求缺口 → 退回', dashed:true });
+  edges.push({ from:seg.go_live.decision.id, to:seg.delivery.deliverable.id, fromSide:'left', toSide:'right', label:'QA/UAT 失敗因交付文件不完整 → 退回', dashed:true });
+
+  m.edges = edges.map(e => ({ id: uid('e'), from:e.from, to:e.to, fromSide:e.fromSide, toSide:e.toSide, label:e.label||'', dashed:!!e.dashed }));
+  return m;
+}
+
+function buildPresetUI(){
+  const m = blankModel(); m.name = 'UI Workflow';
+  const task = newTask('UI 設計流程');
+  m.tasks.push(task);
+  const edges = [];
+
+  m.stagePurpose.request_collection = '收到 PM / PMO / UX 的請求並初步分派';
+  const s0 = stageSegment(task, 0, 'PMs/PMOs/UXs Requests', '是否為我們負責？排程可協調？', 'Accept and Reply', 'Yes');
+  edges.push(...s0.edges);
+  task.stageMeta.request_collection = { entry:'PMs/PMOs/UXs Requests', decision:'是否為我們負責？\n排程是否可協調？', exit:'', deliverables:'Accept and Reply' };
+
+  // Research/Evaluation: Main Request 與 Minor Request 兩條分支，都匯入 Execution 的入口 —
+  // 示範「不同任務類型不用各畫一份，直接連到同一個下游節點」。
+  m.stagePurpose.research_evaluation = '依請求規模分流評估：Main Request 走完整規劃，Minor Request 走輕量處理，兩者最後都進入同一個 Execution';
+  const mainDec = newNode('decision', '新建或沿用既有 Style/Section/Module/Format/Template？', 'research_evaluation', 20, 4);
+  const minorDec = newNode('decision', '版本分支確認？資源是否已在設計系統中？', 'research_evaluation', 20, 158);
+  task.nodes.push(mainDec, minorDec);
+  edges.push({ from:s0.deliverable.id, to:mainDec.id, fromSide:'right', toSide:'left', label:'Main Request', dashed:false });
+  edges.push({ from:s0.deliverable.id, to:minorDec.id, fromSide:'right', toSide:'left', label:'Minor Request', dashed:false });
+  task.stageMeta.research_evaluation = {
+    entry:'Main：New Site / New User Flow / New Page / New Section-Module / Guideline-Template-Style\nMinor：Maintenance / Advice request / Resource',
+    decision:'Main：1.Style 2.Sections 3.Module logic 4.Format 5.Template page（皆為 New / Keep using existing）\nMinor：Version branch check？Is the Resource already in the design system？',
+    exit:'', deliverables:'Main：Style Library / Section Modulation / Resource Format Definition / Case closed condition\nMinor：Quick feedback / Resource Guide' };
+
+  m.stagePurpose.execution = '把評估結論轉換成 UI 設計產出';
+  const s2 = stageSegment(task, 2, 'UI Design 開始', '需要設計系統迭代？版控 Global/Local？', 'Layout Concept + SPEC + Icon/Resources', 'Yes');
+  edges.push(...s2.edges);
+  edges.push({ from:mainDec.id, to:s2.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  edges.push({ from:minorDec.id, to:s2.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  task.stageMeta.execution = { entry:'UI Design 開始', decision:'Need Design system iteration？\nVersion control by Global / Local？\nStyle Bundle update？',
+    exit:'', deliverables:'Proposal/Prototype、Guideline/Advice、Layout Concept、Layout SPEC、Icon/Resources file' };
+
+  m.stagePurpose.review = '交付前的內部審查與回饋';
+  const s3 = stageSegment(task, 3, 'Layout / Spec 待審查', 'Layout/Style/Code Mapping/Motion 品質是否過關？', 'Internal Feedback 完成', 'Yes');
+  edges.push(...s3.edges, { from:s2.deliverable.id, to:s3.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  task.stageMeta.review = { entry:'Internal Review / Feedback 開始',
+    decision:'Layout Quality？\nStyle Quality(有新樣式元素嗎)？\nCode/Token Mapping 精準度(Figma Dev mode)？\nMotion/互動體驗測試(Prototype)？\n檔案內容是否包含需求方所需的所有說明？',
+    exit:'', deliverables:'Internal feedback' };
+
+  m.stagePurpose.delivery = '交付最終設計文件與資源給需求方';
+  const s4 = stageSegment(task, 4, 'Final Design Document / Resource file', '存取權限/範圍比對/版本一致/資源完整？', 'Reply Requester + Internal Report', 'Yes');
+  edges.push(...s4.edges, { from:s3.deliverable.id, to:s4.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  task.stageMeta.delivery = { entry:'Final Design Document / Resource file',
+    decision:'File/Share link Access Check？\nComparison of demand scope？\nVersion consistency？\nResource integrity？',
+    exit:'', deliverables:'Reply Requester / Internal report' };
+
+  m.stagePurpose.go_live = '上線前 UAT 支援與上線後追蹤';
+  const s5 = stageSegment(task, 5, 'UAT 準備', 'UAT 範圍/連結/排程是否確認？', 'Bug Ticket / REQ Ticket', 'Yes');
+  edges.push(...s5.edges, { from:s4.deliverable.id, to:s5.entry.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  const liveNode = newNode('step', '上線追蹤（例行檢查1個月，視需要延長）', 'go_live', 400, 158);
+  task.nodes.push(liveNode);
+  edges.push({ from:s5.deliverable.id, to:liveNode.id, fromSide:'right', toSide:'left', label:'', dashed:false });
+  task.stageMeta.go_live = { entry:'UAT：development complete, ready for UAT\nLive Tracking：上線追蹤開始',
+    decision:'UAT scope/link/schedule check？\nRegular inspection for 1 month？Extended tracking period？',
+    exit:'', deliverables:'Bug Ticket / REQ ticket；Issue Report' };
+
+  m.edges = edges.map(e => ({ id: uid('e'), from:e.from, to:e.to, fromSide:e.fromSide, toSide:e.toSide, label:e.label||'', dashed:!!e.dashed }));
+  return m;
+}
+
+/* =========================================================================
+   3. STATE
+   ========================================================================= */
+let MODEL = blankModel();
+/* filterTaskId: when set, renderAll() only mounts that one task's swimlane
+   row (see ORG TREE section) — everything else about MODEL is untouched,
+   this is purely a view-level filter so it's safe to clear at any time
+   without losing data. */
+const state = { zoom:1, selectedEdgeId:null, filterTaskId:null };
+const nodeIndex = {}; // nodeId -> {node, task, el}
+
+/* Each of the 6 stage columns is normally STAGE_WIDTH wide, but if a task packs
+   more steps into one stage than that, the column (header cell + every task's
+   background band in that column) grows to fit — computed fresh on every
+   render so it always reflects the widest usage across all tasks. */
+let STAGE_LAYOUT = { colWidth:{}, colStart:{}, totalWidth:0 };
+function computeStageLayout(){
+  const colWidth = {};
+  effectiveStageDefs().forEach(sd=> colWidth[sd.id] = STAGE_WIDTH);
+  MODEL.tasks.forEach(task=>{
+    task.nodes.forEach(n=>{
+      const w = n.type==='decision' ? DIA_W : RECT_W;
+      const needed = n.x + w + 60;
+      if(needed > colWidth[n.stageId]) colWidth[n.stageId] = needed;
+    });
+  });
+  const colStart = {};
+  let acc = 0;
+  effectiveStageDefs().forEach(sd=>{ colStart[sd.id] = acc; acc += colWidth[sd.id]; });
+  STAGE_LAYOUT = { colWidth, colStart, totalWidth: acc };
+}
+function globalX(node){ return (STAGE_LAYOUT.colStart[node.stageId]||0) + node.x; }
+
+function rebuildNodeIndex(){
+  Object.keys(nodeIndex).forEach(k=>delete nodeIndex[k]);
+  MODEL.tasks.forEach(task=>{
+    task.nodes.forEach(n=> nodeIndex[n.id] = { node:n, task, el:null });
+  });
+}
+
+/* =========================================================================
+   4. RENDER
+   ========================================================================= */
+const canvasEl = document.getElementById('canvas');
+const edgeSvg = document.getElementById('edgeSvg');
+const edgeDeco = document.getElementById('edgeDeco');
+document.documentElement.style.setProperty('--stage-w', STAGE_WIDTH+'px');
+document.documentElement.style.setProperty('--label-w', LABEL_WIDTH+'px');
+// clicking empty canvas (or starting to drag a node) clears any selected edge
+canvasEl.addEventListener('mousedown', ()=>{
+  if(state.selectedEdgeId){ state.selectedEdgeId = null; updateGeometry(); }
+});
+// pressing Delete/Backspace deletes the currently-selected edge — guarded so
+// it doesn't hijack normal text editing (e.g. backspacing inside a node's
+// title/角色/description field, or any input/textarea) while that field has
+// focus.
+document.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if(!state.selectedEdgeId) return;
+  const activeEl = document.activeElement;
+  const isEditing = activeEl && (activeEl.isContentEditable || activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+  if(isEditing) return;
+  e.preventDefault();
+  MODEL.edges = MODEL.edges.filter(x=> x.id !== state.selectedEdgeId);
+  state.selectedEdgeId = null;
+  updateGeometry();
+});
+
+function renderAll(){
+  if(!MODEL.units) MODEL.units = [];
+  MODEL.tasks.forEach(task=> task.nodes.forEach(ensureNodeStage));
+  // stage column widths are always computed from EVERY task, even while a
+  // filter is active, so the six columns don't resize/jump every time you
+  // switch which task you're looking at.
+  computeStageLayout();
+  rebuildNodeIndex();
+  // if the filtered task was deleted (e.g. via its own ✕ button) while the
+  // filter was active, fall back to showing everything rather than a blank canvas.
+  if(state.filterTaskId && !MODEL.tasks.some(t=>t.id===state.filterTaskId)) state.filterTaskId = null;
+  Array.from(canvasEl.querySelectorAll('.stage-header-row, .task-row-outer')).forEach(el=>el.remove());
+  canvasEl.insertBefore(buildStageHeaderRow(), edgeSvg);
+  const visibleTasks = state.filterTaskId ? MODEL.tasks.filter(t=>t.id===state.filterTaskId) : MODEL.tasks;
+  visibleTasks.forEach(task=> canvasEl.insertBefore(buildTaskRow(task), edgeSvg));
+  renderOrgTree();
+  updateFilterStatus();
+  requestAnimationFrame(updateGeometry);
+}
+
+function buildStageHeaderRow(){
+  const row = document.createElement('div');
+  row.className = 'stage-header-row';
+
+  // No "＋新增任務" button here anymore — every task must be created from the
+  // left org tree (under a unit/role) so it's always classified from birth;
+  // avoids the confusing "two different +新增任務 buttons that do different
+  // things" situation from earlier, and keeps every task reachable/
+  // filterable from the org tree (no more untagged orphans to worry about
+  // when merging many contributors' files together).
+  const spacer = document.createElement('div');
+  spacer.className = 'row-label-spacer';
+  row.appendChild(spacer);
+
+  effectiveStageDefs().forEach((sd, i)=>{
+    const cell = document.createElement('div');
+    cell.className = 'stage-header-cell';
+    const colW = STAGE_LAYOUT.colWidth[sd.id] || STAGE_WIDTH;
+    cell.style.flex = '0 0 ' + colW + 'px';
+    cell.style.width = colW + 'px';
+    cell.style.background = tint(sd.color, 0.09);
+    const head = document.createElement('div');
+    head.className = 'stage-head-title-row';
+    head.style.setProperty('--stage-color', sd.color);
+    head.innerHTML = `<span class="stage-num" style="background:${sd.color}">${i+1}</span><span class="stage-title">${sd.title}</span>`;
+    const purposeEl = document.createElement('div');
+    purposeEl.className = 'stage-purpose';
+    purposeEl.contentEditable = 'true';
+    purposeEl.textContent = MODEL.stagePurpose[sd.id] || '';
+    purposeEl.addEventListener('blur', ()=>{ MODEL.stagePurpose[sd.id] = purposeEl.textContent.trim(); });
+    cell.appendChild(head); cell.appendChild(purposeEl);
+    row.appendChild(cell);
+  });
+  return row;
+}
+
+function buildTaskRow(task){
+  const outer = document.createElement('div');
+  outer.className = 'task-row-outer' + (task.collapsed ? ' collapsed' : '');
+  outer.dataset.taskId = task.id;
+
+  const row = document.createElement('div');
+  row.className = 'task-row';
+
+  const label = document.createElement('div');
+  label.className = 'task-label';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'task-name';
+  nameEl.textContent = task.name;
+  nameEl.addEventListener('blur', ()=>{
+    task.name = nameEl.textContent.trim() || '新任務';
+    nameEl.contentEditable = 'false';
+    renderAll();
+  });
+  nameEl.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ e.preventDefault(); nameEl.blur(); } });
+
+  const actions = document.createElement('div');
+  actions.className = 'task-row-actions';
+  const collapseBtn = document.createElement('button');
+  collapseBtn.className = 'task-mini-btn'; collapseBtn.textContent = task.collapsed ? '▸' : '▾'; collapseBtn.title = '收合 / 展開這個任務';
+  collapseBtn.onclick = ()=>{ task.collapsed = !task.collapsed; renderAll(); };
+  const editBtn = document.createElement('button');
+  editBtn.className = 'task-mini-btn'; editBtn.textContent = '✏️'; editBtn.title = '重新命名';
+  editBtn.onclick = ()=>{
+    nameEl.contentEditable = 'true'; nameEl.focus();
+    const range = document.createRange(); range.selectNodeContents(nameEl);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  };
+  const metaBtn = document.createElement('button');
+  metaBtn.className = 'task-mini-btn'; metaBtn.textContent = '☰'; metaBtn.title = '各階段 Entry / Decision / Exit / Deliverables';
+  const delBtn = document.createElement('button');
+  delBtn.className = 'task-mini-btn del'; delBtn.textContent = '✕'; delBtn.title = '刪除此任務';
+  delBtn.onclick = ()=>{
+    if(!confirm(`確定刪除任務「${task.name}」？其中所有步驟與連接線都會一併刪除。`)) return;
+    const nodeIds = task.nodes.map(n=>n.id);
+    MODEL.edges = MODEL.edges.filter(e=> !nodeIds.includes(e.from) && !nodeIds.includes(e.to));
+    MODEL.tasks = MODEL.tasks.filter(t=>t.id!==task.id);
+    renderAll();
+  };
+  actions.appendChild(collapseBtn); actions.appendChild(editBtn); actions.appendChild(metaBtn); actions.appendChild(delBtn);
+  if(task.unitId || task.roleId){
+    const unit = (MODEL.units||[]).find(u=>u.id===task.unitId);
+    const role = unit ? (unit.roles||[]).find(r=>r.id===task.roleId) : null;
+    const tagText = [unit&&unit.name, role&&role.name].filter(Boolean).join(' / ');
+    if(tagText){
+      const tag = document.createElement('div');
+      tag.className = 'task-tag';
+      tag.textContent = tagText;
+      label.appendChild(tag);
+    }
+  }
+  label.appendChild(nameEl); label.appendChild(actions);
+
+  const hint = document.createElement('div');
+  hint.className = 'task-empty-hint';
+  const b1 = document.createElement('button'); b1.textContent = '＋ 步驟';
+  const b2 = document.createElement('button'); b2.textContent = '＋ 判斷';
+  b1.onclick = ()=> addNodeToTask(task, 'step', b1);
+  b2.onclick = ()=> addNodeToTask(task, 'decision', b2);
+  hint.appendChild(b1); hint.appendChild(b2);
+  label.appendChild(hint);
+
+  row.appendChild(label);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'task-canvas-wrap';
+  const bands = document.createElement('div');
+  bands.className = 'task-bg-bands';
+  effectiveStageDefs().forEach(sd=>{
+    const band = document.createElement('div');
+    band.className = 'task-bg-band';
+    const colW = STAGE_LAYOUT.colWidth[sd.id] || STAGE_WIDTH;
+    band.style.flex = '0 0 ' + colW + 'px';
+    band.style.width = colW + 'px';
+    band.style.background = tint(sd.color, 0.05);
+    bands.appendChild(band);
+  });
+  wrap.appendChild(bands);
+
+  const track = document.createElement('div');
+  track.className = 'task-track';
+  track.dataset.taskId = task.id;
+  let maxY = 150;
+  task.nodes.forEach(n=>{
+    const h = n.type==='decision'? DIA_H : RECT_H;
+    maxY = Math.max(maxY, n.y + h + 40);
+    track.appendChild(renderNode(n));
+  });
+  track.style.minWidth = STAGE_LAYOUT.totalWidth + 'px';
+  track.style.minHeight = maxY + 'px';
+  wrap.appendChild(track);
+  row.appendChild(wrap);
+
+  outer.appendChild(row);
+  const metaPanel = buildTaskMetaPanel(task);
+  metaBtn.onclick = ()=> metaPanel.classList.toggle('open');
+  outer.appendChild(metaPanel);
+  return outer;
+}
+
+function buildTaskMetaPanel(task){
+  const panel = document.createElement('div');
+  panel.className = 'task-meta-panel';
+  effectiveStageDefs().forEach(sd=>{
+    const col = document.createElement('div');
+    col.className = 'task-meta-col';
+    const h = document.createElement('h6'); h.textContent = sd.title;
+    col.appendChild(h);
+    // an orphaned (removed/renamed-away) stage id might not have a
+    // stageMeta entry at all if this task was created before it ever
+    // existed — fall back to a blank one rather than crashing.
+    const meta = task.stageMeta[sd.id] || (task.stageMeta[sd.id] = {entry:'',decision:'',exit:'',deliverables:''});
+    [['entry','Entry Criteria'],['decision','Decision Questions'],['exit','Exit Criteria'],['deliverables','Deliverables']].forEach(([key,lab])=>{
+      const l = document.createElement('label'); l.textContent = lab;
+      const ta = document.createElement('textarea'); ta.value = meta[key] || '';
+      ta.addEventListener('input', ()=>{ meta[key] = ta.value; });
+      col.appendChild(l); col.appendChild(ta);
+    });
+    panel.appendChild(col);
+  });
+  return panel;
+}
+
+/* =========================================================================
+   4b. ORG TREE — 單位(unit) > 角色(role) > 任務(task), rendered in the left
+   side panel. This is purely an organizing/labeling layer on top of the
+   existing flat MODEL.tasks list (a task keeps living in the swimlane grid
+   exactly as before) — it exists so Jerry can hand different units/roles
+   their own "＋新增任務" affordance once this file is distributed out to
+   other departments, and so tasks collected from many people carry a
+   recognizable unit/role tag once merged back together (see mergeImportModel).
+   MODEL.units = [{id, name, collapsed, roles:[{id, name, collapsed}]}]
+   ========================================================================= */
+function renderOrgTree(){
+  const container = document.getElementById('orgTree');
+  if(!container) return;
+  container.innerHTML = '';
+  container.appendChild(buildOrgTree());
+}
+/* small "篩選中：X ✕" pill in the legend bar — the only sign a filter is
+   active if the side panel happens to be scrolled out of view. */
+function updateFilterStatus(){
+  const el = document.getElementById('filterStatus');
+  if(!el) return;
+  if(!state.filterTaskId){ el.classList.remove('show'); el.innerHTML=''; return; }
+  const t = MODEL.tasks.find(t=>t.id===state.filterTaskId);
+  el.classList.add('show');
+  el.innerHTML = '';
+  const label = document.createElement('span');
+  label.textContent = '篩選中：' + (t ? t.name : '（此任務已被刪除）');
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'filter-clear-btn'; clearBtn.textContent = '✕'; clearBtn.title = '清除篩選';
+  clearBtn.onclick = ()=>{ state.filterTaskId = null; renderAll(); };
+  el.appendChild(label); el.appendChild(clearBtn);
+}
+function buildOrgTree(){
+  const wrap = document.createElement('div');
+
+  const allBtn = document.createElement('button');
+  allBtn.className = 'org-view-all' + (state.filterTaskId ? '' : ' active');
+  allBtn.textContent = '🔍 全部 Flow';
+  allBtn.title = '清除篩選，顯示所有任務';
+  allBtn.onclick = ()=>{ state.filterTaskId = null; renderAll(); };
+  wrap.appendChild(allBtn);
+
+  (MODEL.units||[]).forEach(unit=>{
+    wrap.appendChild(buildOrgUnitRow(unit));
+  });
+
+  // tasks created via the canvas's own "＋新增任務" header button (not through
+  // a unit/role here) have no unitId — list them too so they're still
+  // reachable/filterable, otherwise they'd be invisible from this panel.
+  const ungrouped = MODEL.tasks.filter(t=> !t.unitId);
+  if(ungrouped.length){
+    const box = document.createElement('div');
+    box.className = 'org-unit org-unassigned';
+    const head = document.createElement('div');
+    head.className = 'org-row org-unit-head';
+    const name = document.createElement('span');
+    name.className = 'org-name'; name.textContent = '未分類';
+    head.appendChild(name);
+    box.appendChild(head);
+    const list = document.createElement('div');
+    list.className = 'org-tasks';
+    ungrouped.forEach(t=> list.appendChild(buildTaskChip(t)));
+    box.appendChild(list);
+    wrap.appendChild(box);
+  }
+  return wrap;
+}
+/* Shared by both the per-role task lists and the "未分類" bucket. Clicking a
+   task isolates it (renderAll() then only mounts that one swimlane row);
+   clicking the SAME task again toggles back to showing everything, so
+   there's no dead end. */
+function buildTaskChip(t){
+  const chip = document.createElement('div');
+  chip.className = 'org-task-chip' + (state.filterTaskId===t.id ? ' active' : '');
+  chip.textContent = t.name;
+  chip.title = '點擊只顯示此任務的 Flow（再點一次取消篩選）';
+  chip.onclick = ()=>{
+    state.filterTaskId = (state.filterTaskId===t.id) ? null : t.id;
+    renderAll();
+  };
+  return chip;
+}
+function buildOrgUnitRow(unit){
+  const uRow = document.createElement('div');
+  uRow.className = 'org-unit';
+
+  const uHead = document.createElement('div');
+  uHead.className = 'org-row org-unit-head';
+  const uToggle = document.createElement('button');
+  uToggle.className = 'org-toggle'; uToggle.textContent = unit.collapsed ? '▸' : '▾';
+  uToggle.onclick = ()=>{ unit.collapsed = !unit.collapsed; renderOrgTree(); };
+  const uName = document.createElement('span');
+  uName.className = 'org-name'; uName.textContent = unit.name;
+  const uDel = document.createElement('button');
+  uDel.className = 'org-del'; uDel.textContent = '✕'; uDel.title = '刪除單位';
+  uDel.onclick = ()=>{
+    if(!confirm(`刪除單位「${unit.name}」？其下的任務不會被刪除，只會解除單位/角色標記。`)) return;
+    MODEL.tasks.forEach(t=>{ if(t.unitId===unit.id){ t.unitId=null; t.roleId=null; } });
+    MODEL.units = MODEL.units.filter(u=>u.id!==unit.id);
+    renderAll();
+  };
+  uHead.appendChild(uToggle); uHead.appendChild(uName); uHead.appendChild(uDel);
+  uRow.appendChild(uHead);
+
+  if(!unit.collapsed){
+    const rolesWrap = document.createElement('div');
+    rolesWrap.className = 'org-roles';
+    (unit.roles||[]).forEach(role=> rolesWrap.appendChild(buildOrgRoleRow(unit, role)));
+    const addRoleBtn = document.createElement('button');
+    addRoleBtn.className = 'org-add-btn'; addRoleBtn.textContent = '＋ 新增角色';
+    addRoleBtn.onclick = ()=>{
+      const name = prompt('新角色名稱（例如：設計師 / 工程師 / PM）：', '新角色');
+      if(name===null) return;
+      if(!unit.roles) unit.roles = [];
+      unit.roles.push({ id: uid('r'), name: normalizeOrgName(name) || '新角色', collapsed:false });
+      renderAll();
+    };
+    rolesWrap.appendChild(addRoleBtn);
+    uRow.appendChild(rolesWrap);
+  }
+  return uRow;
+}
+function buildOrgRoleRow(unit, role){
+  const rRow = document.createElement('div');
+  rRow.className = 'org-role';
+
+  const rHead = document.createElement('div');
+  rHead.className = 'org-row org-role-head';
+  const rToggle = document.createElement('button');
+  rToggle.className = 'org-toggle'; rToggle.textContent = role.collapsed ? '▸' : '▾';
+  rToggle.onclick = ()=>{ role.collapsed = !role.collapsed; renderOrgTree(); };
+  const rName = document.createElement('span');
+  rName.className = 'org-name'; rName.textContent = role.name;
+  const rDel = document.createElement('button');
+  rDel.className = 'org-del'; rDel.textContent = '✕'; rDel.title = '刪除角色';
+  rDel.onclick = ()=>{
+    if(!confirm(`刪除角色「${role.name}」？其下的任務不會被刪除，只會解除角色標記。`)) return;
+    MODEL.tasks.forEach(t=>{ if(t.roleId===role.id) t.roleId = null; });
+    unit.roles = unit.roles.filter(r=>r.id!==role.id);
+    renderAll();
+  };
+  rHead.appendChild(rToggle); rHead.appendChild(rName); rHead.appendChild(rDel);
+  rRow.appendChild(rHead);
+
+  if(!role.collapsed){
+    const taskList = document.createElement('div');
+    taskList.className = 'org-tasks';
+    MODEL.tasks.filter(t=> t.unitId===unit.id && t.roleId===role.id).forEach(t=> taskList.appendChild(buildTaskChip(t)));
+    const addTaskBtn = document.createElement('button');
+    addTaskBtn.className = 'org-add-btn'; addTaskBtn.textContent = '＋ 新增任務';
+    addTaskBtn.onclick = ()=>{
+      const name = prompt('新任務名稱：', '新任務');
+      if(name===null) return;
+      MODEL.tasks.push(newTask(name || '新任務', unit.id, role.id));
+      renderAll();
+    };
+    taskList.appendChild(addTaskBtn);
+    rRow.appendChild(taskList);
+  }
+  return rRow;
+}
+
+/* Small floating menu listing the 6 stages ("帽子") — used by both
+   addNodeToTask (starting a task's very first step/decision) and addNodeNear
+   (adding from an existing node) so the person picks the stage up front
+   instead of always landing in stage 1 and having to drag across every
+   column afterward ("坐到很後面，還要從第一個帽子慢慢移動過去"). */
+function showStagePicker(anchorRect, onPick){
+  document.querySelectorAll('.stage-pick-menu').forEach(el=>el.remove());
+  const menu = document.createElement('div');
+  menu.className = 'stage-pick-menu';
+  STAGE_DEFS.forEach((sd, i)=>{
+    const btn = document.createElement('button');
+    btn.className = 'stage-pick-item';
+    btn.innerHTML = `<span class="stage-pick-num" style="background:${sd.color}">${i+1}</span>${sd.title}`;
+    btn.addEventListener('mousedown', e=> e.stopPropagation());
+    btn.onclick = (e)=>{ e.stopPropagation(); cleanup(); onPick(sd.id); };
+    menu.appendChild(btn);
+  });
+  document.body.appendChild(menu);
+  menu.style.top = (anchorRect.bottom + 4) + 'px';
+  menu.style.left = anchorRect.left + 'px';
+  requestAnimationFrame(()=>{
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    if(anchorRect.left + mw > window.innerWidth - 8) menu.style.left = (window.innerWidth - mw - 8) + 'px';
+    if(anchorRect.bottom + 4 + mh > window.innerHeight - 8) menu.style.top = (anchorRect.top - mh - 4) + 'px';
+  });
+  function cleanup(){ menu.remove(); document.removeEventListener('mousedown', onDocClick); }
+  function onDocClick(e){ if(!menu.contains(e.target)) cleanup(); }
+  document.addEventListener('mousedown', onDocClick);
+}
+function addNodeToTask(task, type, anchorEl){
+  showStagePicker(anchorEl.getBoundingClientRect(), (stageId)=>{
+    let maxRight = 0, any = false;
+    task.nodes.forEach(n=>{
+      if(n.stageId !== stageId) return;
+      any = true;
+      const w = n.type==='decision'?DIA_W:RECT_W;
+      maxRight = Math.max(maxRight, n.x + w);
+    });
+    const x = any ? maxRight + 40 : 20;
+    const y = 30;
+    task.nodes.push(newNode(type, '', stageId, x, y));
+    renderAll();
+  });
+}
+
+/* Add a new node near `sourceNode` — same stage as the source by default
+   offset. Boxes are freely draggable afterwards, so the exact spot doesn't
+   matter much. Deliberately does NOT create a connecting edge — creating and
+   connecting are two separate actions now (see the connector dots below). */
+function addNodeNear(sourceNode, type, anchorEl){
+  const info = nodeIndex[sourceNode.id];
+  if(!info) return;
+  showStagePicker(anchorEl.getBoundingClientRect(), (stageId)=>{
+    let x, y;
+    if(stageId === sourceNode.stageId){
+      // staying in the same stage as the source node: place it right next to
+      // it, same as before this change.
+      const srcW = sourceNode.type==='decision'?DIA_W:RECT_W;
+      x = sourceNode.x + srcW + 60;
+      y = sourceNode.y;
+    } else {
+      // jumping to a different stage: append after whatever this task
+      // already has in that column (same placement rule as addNodeToTask),
+      // since "next to the source node" has no meaning once it's a
+      // different column.
+      let maxRight = 0, any = false;
+      info.task.nodes.forEach(n=>{
+        if(n.stageId !== stageId) return;
+        any = true;
+        const w = n.type==='decision'?DIA_W:RECT_W;
+        maxRight = Math.max(maxRight, n.x + w);
+      });
+      x = any ? maxRight + 40 : 20;
+      y = sourceNode.y;
+    }
+    info.task.nodes.push(newNode(type, '', stageId, x, y));
+    renderAll();
+  });
+}
+
+function renderNode(n){
+  const el = document.createElement('div');
+  el.className = 'node ' + n.type;
+  el.id = n.id;
+  el.style.left = globalX(n) + 'px';
+  el.style.top = n.y + 'px';
+  if(nodeIndex[n.id]) nodeIndex[n.id].el = el;
+  // border colour tags which of the 6 stages this node belongs to — the tag
+  // travels with the node when it's dragged across a stage boundary, and is
+  // the source of truth (not screen position) for which colour band it
+  // counts toward, so overflowing steps stay correctly attributed.
+  const stageDef = effectiveStageDefs().find(s=>s.id===n.stageId);
+
+  if(n.type==='decision'){
+    const bg = document.createElement('div'); bg.className = 'diamond-bg'; el.appendChild(bg);
+    if(stageDef) bg.style.borderColor = stageDef.color;
+  }
+
+  const body = document.createElement('div');
+  body.className = 'node-body';
+  if(stageDef && n.type!=='decision') body.style.borderColor = stageDef.color;
+  const title = document.createElement('div');
+  title.className = 'node-title';
+  title.contentEditable = 'true';
+  title.dataset.placeholder = n.type==='decision' ? '判斷問題…' : '步驟名稱…';
+  title.textContent = n.label || '';
+  title.addEventListener('mousedown', e=> e.stopPropagation());
+  title.addEventListener('blur', ()=>{ n.label = title.textContent.trim(); });
+  const owner = document.createElement('div');
+  owner.className = 'node-owner';
+  owner.contentEditable = 'true';
+  owner.dataset.placeholder = '當下角色…';
+  owner.textContent = n.owner || '';
+  owner.addEventListener('mousedown', e=> e.stopPropagation());
+  owner.addEventListener('blur', ()=>{ n.owner = owner.textContent.trim(); });
+  const desc = document.createElement('div');
+  desc.className = 'node-desc';
+  desc.contentEditable = 'true';
+  desc.textContent = n.note || '';
+  desc.addEventListener('mousedown', e=> e.stopPropagation());
+  desc.addEventListener('blur', ()=>{ n.note = desc.textContent.trim(); });
+  body.appendChild(title); body.appendChild(owner); body.appendChild(desc);
+  el.appendChild(body);
+
+  // single top icon cluster: add step / add decision / delete
+  const topActions = document.createElement('div');
+  topActions.className = 'node-top-actions';
+  const addStepBtn = document.createElement('button');
+  addStepBtn.className = 'top-action-btn'; addStepBtn.textContent = '▭'; addStepBtn.dataset.tip = '新增步驟';
+  addStepBtn.addEventListener('mousedown', e=> e.stopPropagation());
+  addStepBtn.onclick = ()=> addNodeNear(n, 'step', addStepBtn);
+  const addDecBtn = document.createElement('button');
+  addDecBtn.className = 'top-action-btn dec'; addDecBtn.textContent = '◇'; addDecBtn.dataset.tip = '新增判斷';
+  addDecBtn.addEventListener('mousedown', e=> e.stopPropagation());
+  addDecBtn.onclick = ()=> addNodeNear(n, 'decision', addDecBtn);
+  const delBtn = document.createElement('button');
+  delBtn.className = 'top-action-btn del'; delBtn.textContent = '✕'; delBtn.dataset.tip = '刪除';
+  delBtn.addEventListener('mousedown', e=> e.stopPropagation());
+  delBtn.onclick = ()=>{
+    const info = nodeIndex[n.id]; if(!info) return;
+    info.task.nodes = info.task.nodes.filter(x=>x.id!==n.id);
+    MODEL.edges = MODEL.edges.filter(e=> e.from!==n.id && e.to!==n.id);
+    renderAll();
+  };
+  topActions.appendChild(addStepBtn); topActions.appendChild(addDecBtn); topActions.appendChild(delBtn);
+  el.appendChild(topActions);
+
+  // four connector dots — dedicated line-drawing handles
+  ['top','right','bottom','left'].forEach(side=>{
+    const dot = document.createElement('div');
+    dot.className = 'node-dot dot-' + side;
+    dot.title = '拖曳到另一個節點的邊上完成連線';
+    wireDot(dot, n, side);
+    el.appendChild(dot);
+  });
+
+  el.addEventListener('mousedown', startDrag);
+  return el;
+}
+
+/* =========================================================================
+   5. DRAG NODE (move an existing node around)
+   ========================================================================= */
+function startDrag(e){
+  if(e.target.closest('.node-top-actions') || e.target.closest('.node-dot')) return;
+  const el = e.currentTarget;
+  const info = nodeIndex[el.id];
+  if(!info) return;
+  e.preventDefault();
+  el.classList.add('dragging');
+  const startClientX = e.clientX, startClientY = e.clientY;
+  const startGX = globalX(info.node), startNY = info.node.y;
+  let liveGX = startGX;
+  function onMove(ev){
+    const dx = (ev.clientX - startClientX) / state.zoom;
+    const dy = (ev.clientY - startClientY) / state.zoom;
+    liveGX = Math.max(0, startGX + dx);
+    info.node.y = Math.max(0, startNY + dy);
+    el.style.left = liveGX + 'px';
+    el.style.top = info.node.y + 'px';
+    growTrackIfNeeded(el, liveGX, info.node.y);
+    updateGeometry();
+  }
+  function onUp(){
+    el.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    // Decide which stage column the node was dropped into (by its final
+    // screen position), re-tag it, and convert back to a LOCAL x within that
+    // stage. renderAll() then recomputes column widths, so if this pushed a
+    // stage's furthest node further right, that stage's colour band grows.
+    let newStageId = STAGE_DEFS[STAGE_DEFS.length-1].id;
+    for(const sd of STAGE_DEFS){
+      const start = STAGE_LAYOUT.colStart[sd.id], end = start + STAGE_LAYOUT.colWidth[sd.id];
+      if(liveGX < end){ newStageId = sd.id; break; }
+    }
+    info.node.stageId = newStageId;
+    info.node.x = Math.max(0, liveGX - STAGE_LAYOUT.colStart[newStageId]);
+    renderAll();
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function growTrackIfNeeded(nodeEl, gx, y){
+  const track = nodeEl.closest('.task-track');
+  if(!track) return;
+  const info = nodeIndex[nodeEl.id];
+  const w = info.node.type==='decision'? DIA_W : RECT_W;
+  const h = info.node.type==='decision'? DIA_H : RECT_H;
+  const needW = gx + w + 60;
+  const needH = y + h + 40;
+  if(needW > track.offsetWidth) track.style.minWidth = needW + 'px';
+  if(needH > track.offsetHeight) track.style.minHeight = needH + 'px';
+}
+
+/* =========================================================================
+   5b. CONNECTOR DOTS — the only way to draw a line now. Drag from a dot on
+   one node to a dot's general vicinity on another node to connect them;
+   dropping on empty canvas does nothing (creating and connecting are
+   fully separate actions). The side you dragged from and the side you
+   dropped nearest to are both remembered so the line can route with a
+   right-angle bend instead of a diagonal when the two sides don't line up.
+   ========================================================================= */
+function wireDot(dotEl, sourceNode, side){
+  dotEl.addEventListener('mousedown', (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    const sourceEl = document.getElementById(sourceNode.id);
+    sourceEl.classList.add('connecting');
+    const tempPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+    tempPath.setAttribute('stroke', '#5e6ad2');
+    tempPath.setAttribute('stroke-width', '2');
+    tempPath.setAttribute('fill', 'none');
+    tempPath.setAttribute('stroke-dasharray', '5,4');
+    edgeSvg.appendChild(tempPath);
+
+    function onMove(ev){
+      const canvasRect = canvasEl.getBoundingClientRect();
+      const p1 = sideAnchor(sourceNode.id, side);
+      const cursor = { x:(ev.clientX-canvasRect.left)/state.zoom, y:(ev.clientY-canvasRect.top)/state.zoom };
+      tempPath.setAttribute('d', `M${p1.x},${p1.y} L${cursor.x},${cursor.y}`);
+      document.querySelectorAll('.node.connect-target').forEach(x=>x.classList.remove('connect-target'));
+      const hover = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.node');
+      if(hover && hover.id !== sourceNode.id) hover.classList.add('connect-target');
+    }
+    function onUp(ev){
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      sourceEl.classList.remove('connecting');
+      document.querySelectorAll('.node.connect-target').forEach(x=>x.classList.remove('connect-target'));
+      tempPath.remove();
+      const targetEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.node');
+      if(targetEl && targetEl.id !== sourceNode.id){
+        const toSide = nearestSide(targetEl, ev.clientX, ev.clientY);
+        MODEL.edges.push({ id: uid('e'), from: sourceNode.id, to: targetEl.id, fromSide: side, toSide, label:'', dashed:false });
+        renderAll();
+      }
+    }
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+/* =========================================================================
+   6. GEOMETRY — anchors, orthogonal routing, and drawing edges + decorations
+   ========================================================================= */
+function rectOf(el, canvasRect){
+  const r = el.getBoundingClientRect();
+  return {
+    left:(r.left-canvasRect.left)/state.zoom, top:(r.top-canvasRect.top)/state.zoom,
+    right:(r.right-canvasRect.left)/state.zoom, bottom:(r.bottom-canvasRect.top)/state.zoom,
+    cx:(r.left+r.right)/2/state.zoom - canvasRect.left/state.zoom,
+    cy:(r.top+r.bottom)/2/state.zoom - canvasRect.top/state.zoom,
+  };
+}
+/* fixed anchor point for a specific side of a node, regardless of where the other end is */
+function sideAnchor(nodeId, side){
+  const info = nodeIndex[nodeId];
+  if(!info || !info.el) return { x:0, y:0 };
+  const r = rectOf(info.el, canvasEl.getBoundingClientRect());
+  if(side==='top') return { x:(r.left+r.right)/2, y:r.top };
+  if(side==='bottom') return { x:(r.left+r.right)/2, y:r.bottom };
+  if(side==='left') return { x:r.left, y:(r.top+r.bottom)/2 };
+  return { x:r.right, y:(r.top+r.bottom)/2 };
+}
+/* which of a node's 4 sides is closest to a given screen point — used to decide
+   which side a dropped connection "landed" on */
+function nearestSide(el, clientX, clientY){
+  const canvasRect = canvasEl.getBoundingClientRect();
+  const cursor = { x:(clientX-canvasRect.left)/state.zoom, y:(clientY-canvasRect.top)/state.zoom };
+  const r = rectOf(el, canvasRect);
+  const candidates = {
+    top:{ x:(r.left+r.right)/2, y:r.top }, bottom:{ x:(r.left+r.right)/2, y:r.bottom },
+    left:{ x:r.left, y:(r.top+r.bottom)/2 }, right:{ x:r.right, y:(r.top+r.bottom)/2 },
+  };
+  let best='right', bestD=Infinity;
+  Object.entries(candidates).forEach(([side,pt])=>{
+    const d = Math.hypot(pt.x-cursor.x, pt.y-cursor.y);
+    if(d<bestD){ bestD=d; best=side; }
+  });
+  return best;
+}
+/* legacy fallback (edges saved before fromSide/toSide existed): pick whichever
+   side of each node points toward the other, same behaviour as before */
+function dynamicAnchor(nodeId, towards){
+  const info = nodeIndex[nodeId];
+  const r = rectOf(info.el, canvasEl.getBoundingClientRect());
+  const dx = towards.x-r.cx, dy = towards.y-r.cy;
+  if(Math.abs(dx) >= Math.abs(dy)) return dx>=0 ? {point:{x:r.right,y:r.cy}, side:'right'} : {point:{x:r.left,y:r.cy}, side:'left'};
+  return dy>=0 ? {point:{x:r.cx,y:r.bottom}, side:'bottom'} : {point:{x:r.cx,y:r.top}, side:'top'};
+}
+function sideNormal(side){
+  return side==='right' ? {x:1,y:0} : side==='left' ? {x:-1,y:0} : side==='top' ? {x:0,y:-1} : {x:0,y:1};
+}
+function sideIsHorizontal(side){ return side==='left' || side==='right'; }
+/* straight line when the two anchor points already line up on an axis;
+   otherwise step out from each side and add one right-angle bend so the
+   connector never has to run diagonally across the canvas.
+   If the exit/entry sides fundamentally disagree (e.g. dragging from a
+   node's BOTTOM to a target that's actually above it, entering via its TOP)
+   a single bend would have to double back through one of the two boxes —
+   detected via `backtracks()` — so instead we swing out to whichever side
+   has more clearance around both node rects, then come back in. */
+function backtracks(n, isHorizontalAxis, delta){
+  const dir = isHorizontalAxis ? n.x : n.y;
+  return dir !== 0 && delta !== 0 && Math.sign(delta) !== Math.sign(dir);
+}
+/* `bendOffset` lets the user manually nudge a corridor route further out —
+   useful when two rollback/feedback lines both want roughly the same
+   clear-of-the-boxes corridor and end up overlapping each other. It only
+   changes anything for routes that already need a corridor (a genuine
+   direction conflict, or the user has already dragged this edge's bend
+   handle once) — edges that were a clean single bend or straight line stay
+   exactly as before when bendOffset is 0, so this can't silently change the
+   look of edges nobody has touched. Returns `corridor` metadata (axis +
+   position + span) when a corridor was used, so a drag handle can be drawn
+   and dragged along the right axis. */
+/* does the straight segment from (ax,ay) to (bx,by) — always either purely
+   horizontal or purely vertical, the only two kinds this router ever draws —
+   cut through `rect`? Used to catch a corridor "spur" leg crossing straight
+   through the OTHER connected node (see buildOrthogonalPath). */
+function segClipsRect(ax, ay, bx, by, rect){
+  if(!rect) return false;
+  if(ay === by){
+    const lo = Math.min(ax,bx), hi = Math.max(ax,bx);
+    return ay > rect.top && ay < rect.bottom && hi > rect.left && lo < rect.right;
+  }
+  const lo = Math.min(ay,by), hi = Math.max(ay,by);
+  return ax > rect.left && ax < rect.right && hi > rect.top && lo < rect.bottom;
+}
+function buildOrthogonalPath(p1, fromSide, p2, toSide, rFrom, rTo, bendOffset){
+  bendOffset = bendOffset || 0;
+  // CLEAR is intentionally a bit more than STUB: when the entry/exit side
+  // has its own directional preference (see preferBottom/preferRight below),
+  // the corridor needs to clear not just the node rect but the little stub
+  // poking out past it too, or the approach segment ends up reversing
+  // direction by just a couple of px right at the target — technically
+  // harmless but pointless, CLEAR>STUB avoids it outright.
+  const STUB = 26, CLEAR = 32;
+  const n1 = sideNormal(fromSide), n2 = sideNormal(toSide);
+  const e1 = { x:p1.x+n1.x*STUB, y:p1.y+n1.y*STUB };
+  const e2 = { x:p2.x+n2.x*STUB, y:p2.y+n2.y*STUB };
+  const h1 = sideIsHorizontal(fromSide), h2 = sideIsHorizontal(toSide);
+  const back1 = backtracks(n1, h1, h1 ? e2.x-e1.x : e2.y-e1.y);
+  const back2 = backtracks(n2, h2, h2 ? e1.x-e2.x : e1.y-e2.y);
+
+  let mids, corridor = null;
+  if(back1 || back2 || bendOffset !== 0){
+    // which axis the corridor runs on depends only on the source's own exit
+    // side — the entry side's axis always ends up matching automatically,
+    // since the corridor's two turns are mirror images of each other.
+    // Source never has a preference for WHICH side of that axis to use
+    // (its own exit is perpendicular to the corridor by construction) — but
+    // if the entry side is vertical/horizontal in a way that DOES have an
+    // opinion (e.g. entering via 'bottom' means "approach from below"), that
+    // opinion must win, or the corridor can end up on the wrong side of the
+    // target and the final stub has to cross straight through its box to
+    // get there (exactly what routed a line through a diamond here).
+    if(h1){
+      const bottomClear = Math.max(rFrom?rFrom.bottom:e1.y, rTo?rTo.bottom:e2.y) + CLEAR;
+      const topClear = Math.min(rFrom?rFrom.top:e1.y, rTo?rTo.top:e2.y) - CLEAR;
+      let preferBottom;
+      if(!h2 && n2.y !== 0) preferBottom = n2.y > 0;
+      else preferBottom = (Math.abs(bottomClear-e1.y)+Math.abs(bottomClear-e2.y)) <= (Math.abs(e1.y-topClear)+Math.abs(e2.y-topClear));
+      const corridorY = (preferBottom ? bottomClear : topClear) + bendOffset;
+      // The two "spur" legs below (e1 up/down to the corridor, corridor down/up
+      // into e2) travel at each node's own natural x — safe from clipping that
+      // node's OWN box, but if the OTHER connected node happens to sit right
+      // in that vertical path (its x-range includes this spur's x, and its
+      // y-range spans between the corridor and the spur's start), the spur
+      // cuts straight through it. Elevate/lower that specific spur to a
+      // shared safe x (clear of BOTH rects) instead, only when needed — this
+      // is exactly the "S2下方連到Q1下方會穿透" case, where a much-taller
+      // decision diamond sat directly in the way of what should have been a
+      // simple side-swing.
+      const clearLeft = Math.min(rFrom?rFrom.left:e1.x, rTo?rTo.left:e2.x) - CLEAR;
+      const clearRight = Math.max(rFrom?rFrom.right:e1.x, rTo?rTo.right:e2.x) + CLEAR;
+      let x1 = e1.x, x2 = e2.x;
+      if(segClipsRect(x1, e1.y, x1, corridorY, rTo)) x1 = (Math.abs(x1-clearLeft) <= Math.abs(x1-clearRight)) ? clearLeft : clearRight;
+      if(segClipsRect(x2, e2.y, x2, corridorY, rFrom)) x2 = (Math.abs(x2-clearLeft) <= Math.abs(x2-clearRight)) ? clearLeft : clearRight;
+      mids = [];
+      if(x1 !== e1.x) mids.push({x:x1, y:e1.y});
+      mids.push({x:x1, y:corridorY});
+      if(x2 !== x1) mids.push({x:x2, y:corridorY});
+      if(x2 !== e2.x) mids.push({x:x2, y:e2.y});
+      corridor = { axis:'y', value:corridorY, x1:e1.x, x2:e2.x };
+    } else {
+      const rightClear = Math.max(rFrom?rFrom.right:e1.x, rTo?rTo.right:e2.x) + CLEAR;
+      const leftClear = Math.min(rFrom?rFrom.left:e1.x, rTo?rTo.left:e2.x) - CLEAR;
+      let preferRight;
+      if(h2 && n2.x !== 0) preferRight = n2.x > 0;
+      else preferRight = (Math.abs(rightClear-e1.x)+Math.abs(rightClear-e2.x)) <= (Math.abs(e1.x-leftClear)+Math.abs(e2.x-leftClear));
+      const corridorX = (preferRight ? rightClear : leftClear) + bendOffset;
+      // same fix, rotated 90°: the horizontal spur out to the corridor column
+      // travels at each node's own stub height, which can cut through the
+      // OTHER node if it's tall enough to reach that height (e.g. a step
+      // exiting its bottom, next to a much-taller decision diamond in the
+      // same row — precisely Jerry's reported case).
+      const clearAbove = Math.min(rFrom?rFrom.top:e1.y, rTo?rTo.top:e2.y) - CLEAR;
+      const clearBelow = Math.max(rFrom?rFrom.bottom:e1.y, rTo?rTo.bottom:e2.y) + CLEAR;
+      let y1 = e1.y, y2 = e2.y;
+      if(segClipsRect(e1.x, y1, corridorX, y1, rTo)) y1 = (Math.abs(y1-clearAbove) <= Math.abs(y1-clearBelow)) ? clearAbove : clearBelow;
+      if(segClipsRect(e2.x, y2, corridorX, y2, rFrom)) y2 = (Math.abs(y2-clearAbove) <= Math.abs(y2-clearBelow)) ? clearAbove : clearBelow;
+      mids = [];
+      if(y1 !== e1.y) mids.push({x:e1.x, y:y1});
+      mids.push({x:corridorX, y:y1});
+      if(y2 !== y1) mids.push({x:corridorX, y:y2});
+      if(y2 !== e2.y) mids.push({x:e2.x, y:y2});
+      corridor = { axis:'x', value:corridorX, y1:e1.y, y2:e2.y };
+    }
+  } else if(h1 === h2){
+    // no backtrack (checked above) already guarantees the two stubs e1/e2
+    // sit clear of BOTH node rects with room to spare, however big the
+    // perpendicular offset between the two nodes is — so the direct run
+    // from e1 to e2 can never clip through either box. There's no need for
+    // a right-angle jog here at all; it was pure visual noise for anything
+    // short of a near-pixel-perfect alignment ("這麼短的路徑...應該直接一條
+    // 直線就好" — two adjacent nodes with a few px of vertical drift were
+    // getting a full L-shaped detour instead of a plain, almost-straight line).
+    mids = [];
+  } else {
+    mids = h1 ? [{x:e2.x, y:e1.y}] : [{x:e1.x, y:e2.y}];
+  }
+  const pts = [p1, e1, ...mids, e2, p2];
+  return { d: roundedPathFromPoints(pts, 14), pts, corridor };
+}
+/* Renders the same logical waypoints as a softly-rounded polyline instead of
+   a sharp-cornered one — purely cosmetic (routing/collision-avoidance above
+   is unchanged, and callers still get the exact sharp `pts` for label
+   placement, hit-testing, and the bend/endpoint handles). At each interior
+   vertex, pull back a small radius along both adjacent segments and round
+   the corner with a quadratic curve; collinear "corners" (a vertex that
+   isn't really a turn) end up as a harmless no-op and stay perfectly straight. */
+function roundedPathFromPoints(pts, radius){
+  if(pts.length <= 2) return 'M' + pts.map(p=>`${p.x},${p.y}`).join(' L ');
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for(let i=1;i<pts.length-1;i++){
+    const prev = pts[i-1], curr = pts[i], next = pts[i+1];
+    const inLen = Math.hypot(curr.x-prev.x, curr.y-prev.y);
+    const outLen = Math.hypot(next.x-curr.x, next.y-curr.y);
+    const r = Math.min(radius, inLen/2, outLen/2);
+    if(r < 0.5){ d += ` L${curr.x},${curr.y}`; continue; }
+    const inX = curr.x - (curr.x-prev.x)/inLen*r, inY = curr.y - (curr.y-prev.y)/inLen*r;
+    const outX = curr.x + (next.x-curr.x)/outLen*r, outY = curr.y + (next.y-curr.y)/outLen*r;
+    d += ` L${inX},${inY} Q${curr.x},${curr.y} ${outX},${outY}`;
+  }
+  d += ` L${pts[pts.length-1].x},${pts[pts.length-1].y}`;
+  return d;
+}
+/* the label/buttons should sit ON the actual bent line, not on the straight
+   line between the two node anchors — with the new detour routing those can
+   be far apart, which is exactly what made the decorations look disconnected
+   from their line. Walk the real path points to the halfway point by length. */
+function pathMidpoint(pts){
+  const segs = [];
+  let total = 0;
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i], b=pts[i+1], len=Math.hypot(b.x-a.x, b.y-a.y);
+    segs.push({a,b,len}); total += len;
+  }
+  let target = total/2, acc = 0;
+  for(const s of segs){
+    if(acc+s.len >= target){
+      const t = s.len ? (target-acc)/s.len : 0;
+      return { x:s.a.x+(s.b.x-s.a.x)*t, y:s.a.y+(s.b.y-s.a.y)*t };
+    }
+    acc += s.len;
+  }
+  return pts[pts.length-1];
+}
+
+function updateGeometry(){
+  const canvasRect = canvasEl.getBoundingClientRect();
+  const totalW = canvasEl.scrollWidth, totalH = canvasEl.scrollHeight;
+  edgeSvg.setAttribute('width', totalW);
+  edgeSvg.setAttribute('height', totalH);
+  edgeSvg.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
+
+  if(!edgeSvg.querySelector('defs')){
+    edgeSvg.insertAdjacentHTML('afterbegin', `<defs>
+      <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7a7f8c"/></marker>
+      <marker id="arrowRed" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker>
+    </defs>`);
+  }
+  Array.from(edgeSvg.querySelectorAll('path.edge-path, path.edge-hit')).forEach(p=>p.remove());
+  edgeDeco.innerHTML = '';
+  edgeDeco.style.width = totalW+'px'; edgeDeco.style.height = totalH+'px';
+
+  MODEL.edges.forEach(edge=>{
+    const fromInfo = nodeIndex[edge.from], toInfo = nodeIndex[edge.to];
+    if(!fromInfo || !toInfo || !fromInfo.el || !toInfo.el) return;
+    let fromSide = edge.fromSide, toSide = edge.toSide, p1, p2;
+    const rFrom = rectOf(fromInfo.el, canvasRect), rTo = rectOf(toInfo.el, canvasRect);
+    if(fromSide && toSide){
+      p1 = sideAnchor(edge.from, fromSide);
+      p2 = sideAnchor(edge.to, toSide);
+    } else {
+      const dyn1 = dynamicAnchor(edge.from, {x:rTo.cx, y:rTo.cy});
+      const dyn2 = dynamicAnchor(edge.to, {x:rFrom.cx, y:rFrom.cy});
+      p1 = dyn1.point; p2 = dyn2.point; fromSide = fromSide || dyn1.side; toSide = toSide || dyn2.side;
+    }
+    const { d, pts, corridor } = buildOrthogonalPath(p1, fromSide, p2, toSide, rFrom, rTo, edge.bendOffset);
+    const isSelected = edge.id === state.selectedEdgeId;
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('class','edge-path' + (isSelected?' selected':''));
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', edge.dashed ? '#c0392b' : (isSelected ? '#5e6ad2' : '#8a8f9c'));
+    path.setAttribute('stroke-width', isSelected ? '3' : (edge.dashed ? '1.75' : '2'));
+    if(edge.dashed) path.setAttribute('stroke-dasharray','6,5');
+    path.setAttribute('fill','none');
+    path.setAttribute('marker-end', edge.dashed ? 'url(#arrowRed)' : 'url(#arrow)');
+    edgeSvg.appendChild(path);
+
+    // Click the line to select it (click again to deselect). Selection —
+    // not hover-timing — is what reveals the label/toggle/delete buttons, so
+    // there's no fragile hover chain to fall out of while moving toward them.
+    const hit = document.createElementNS('http://www.w3.org/2000/svg','path');
+    hit.setAttribute('class','edge-hit');
+    hit.setAttribute('d', d);
+    hit.setAttribute('stroke', 'transparent');
+    hit.setAttribute('stroke-width', '16');
+    hit.setAttribute('fill', 'none');
+    hit.style.pointerEvents = 'auto';
+    hit.addEventListener('mousedown', (ev)=>{
+      ev.stopPropagation();
+      state.selectedEdgeId = (state.selectedEdgeId===edge.id) ? null : edge.id;
+      updateGeometry();
+    });
+    edgeSvg.appendChild(hit);
+
+    const { x:mx, y:my } = pathMidpoint(pts);
+    const deco = document.createElement('div');
+    deco.className = 'edge-deco' + (isSelected ? ' show' : '');
+    deco.style.left = mx+'px'; deco.style.top = my+'px';
+    deco.addEventListener('mousedown', ev=> ev.stopPropagation());
+    const labelEl = document.createElement('div');
+    labelEl.className = 'edge-label' + (edge.dashed?' dashed-label':'') + (edge.label ? ' filled' : '');
+    labelEl.textContent = edge.label || '';
+    labelEl.title = '點擊編輯標籤';
+    labelEl.onclick = ()=>{
+      const val = prompt('連線標籤（例如 Yes / No / 退回原因）：', edge.label||'');
+      if(val===null) return;
+      edge.label = val; updateGeometry();
+    };
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'edge-btn toggle' + (edge.dashed?' active':'');
+    toggleBtn.title = '切換為 Rollback 虛線 / 一般連線';
+    toggleBtn.textContent = '⟲';
+    toggleBtn.onclick = ()=>{ edge.dashed = !edge.dashed; updateGeometry(); };
+    const delBtn = document.createElement('button');
+    delBtn.className = 'edge-btn del'; delBtn.title='刪除連線'; delBtn.textContent='✕';
+    delBtn.onclick = ()=>{
+      MODEL.edges = MODEL.edges.filter(x=>x.id!==edge.id);
+      if(state.selectedEdgeId===edge.id) state.selectedEdgeId = null;
+      updateGeometry();
+    };
+    deco.appendChild(labelEl); deco.appendChild(toggleBtn); deco.appendChild(delBtn);
+    edgeDeco.appendChild(deco);
+
+    if(isSelected){
+      // endpoint handles — drag either end onto a different node to
+      // reconnect it there instead of deleting and redrawing the whole edge
+      [['from', p1, p2, edge.to], ['to', p2, p1, edge.from]].forEach(([end, pt, otherPt, otherId])=>{
+        const handle = document.createElement('div');
+        handle.className = 'edge-endpoint-handle';
+        handle.style.left = pt.x+'px'; handle.style.top = pt.y+'px';
+        handle.title = '拖曳到另一個節點上，重新連接這一端';
+        handle.addEventListener('mousedown', (ev)=>{
+          ev.preventDefault(); ev.stopPropagation();
+          const tempPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+          tempPath.setAttribute('stroke', '#5e6ad2'); tempPath.setAttribute('stroke-width','2');
+          tempPath.setAttribute('fill','none'); tempPath.setAttribute('stroke-dasharray','5,4');
+          edgeSvg.appendChild(tempPath);
+          function onMove(mv){
+            const cr = canvasEl.getBoundingClientRect();
+            const cursor = { x:(mv.clientX-cr.left)/state.zoom, y:(mv.clientY-cr.top)/state.zoom };
+            tempPath.setAttribute('d', `M${otherPt.x},${otherPt.y} L${cursor.x},${cursor.y}`);
+            document.querySelectorAll('.node.connect-target').forEach(x=>x.classList.remove('connect-target'));
+            const hover = document.elementFromPoint(mv.clientX, mv.clientY)?.closest('.node');
+            if(hover && hover.id !== otherId) hover.classList.add('connect-target');
+          }
+          function onUp(uv){
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.querySelectorAll('.node.connect-target').forEach(x=>x.classList.remove('connect-target'));
+            tempPath.remove();
+            const targetEl = document.elementFromPoint(uv.clientX, uv.clientY)?.closest('.node');
+            if(targetEl && targetEl.id !== otherId){
+              const side = nearestSide(targetEl, uv.clientX, uv.clientY);
+              if(end==='from'){ edge.from = targetEl.id; edge.fromSide = side; }
+              else { edge.to = targetEl.id; edge.toSide = side; }
+              edge.bendOffset = 0; // old corridor position no longer applies to the new geometry
+            }
+            updateGeometry();
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+        edgeDeco.appendChild(handle);
+      });
+
+      // Bend handle — drag along the axis to push this line's route away from
+      // whatever it's overlapping (another line, or a third node it happens
+      // to cross like this user hit: a "simple" edge with no direction
+      // conflict of its own can still visually cross an unrelated box in
+      // between, and previously had no handle at all since one only
+      // appeared once a corridor was already forced. Now every selected
+      // edge gets a handle — for edges still on the simple/straight route it
+      // starts the corridor on first drag instead of only adjusting an
+      // existing one. Axis matches the source's own exit side (horizontal
+      // exit -> drag up/down to change height; vertical exit -> drag
+      // left/right to change position), same rule buildOrthogonalPath uses
+      // internally once bendOffset is non-zero.
+      {
+        const axis = corridor ? corridor.axis : (sideIsHorizontal(fromSide) ? 'y' : 'x');
+        let bx, by;
+        if(corridor){
+          bx = axis==='y' ? corridor.x1+(corridor.x2-corridor.x1)*0.25 : corridor.value;
+          by = axis==='y' ? corridor.value : corridor.y1+(corridor.y2-corridor.y1)*0.25;
+        } else {
+          // no corridor yet — anchor near the path's midpoint but nudged off
+          // to the side so it doesn't sit right on top of the label cluster
+          const mid = pathMidpoint(pts);
+          bx = mid.x + (axis==='y' ? 0 : 34);
+          by = mid.y + (axis==='y' ? -30 : 0);
+        }
+        const bendHandle = document.createElement('div');
+        bendHandle.className = 'edge-bend-handle axis-' + axis;
+        bendHandle.style.left = bx+'px'; bendHandle.style.top = by+'px';
+        bendHandle.textContent = axis==='y' ? '↕' : '↔';
+        bendHandle.title = axis==='y' ? '上下拖曳，調整這條線繞開的高度' : '左右拖曳，調整這條線繞開的位置';
+        bendHandle.addEventListener('mousedown', (ev)=>{
+          ev.preventDefault(); ev.stopPropagation();
+          const startClientX = ev.clientX, startClientY = ev.clientY;
+          const startOffset = edge.bendOffset || 0;
+          function onMove(mv){
+            const delta = axis==='y' ? (mv.clientY-startClientY)/state.zoom : (mv.clientX-startClientX)/state.zoom;
+            edge.bendOffset = startOffset + delta;
+            updateGeometry();
+          }
+          function onUp(){
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+        edgeDeco.appendChild(bendHandle);
+      }
+    }
+  });
+}
+
+/* =========================================================================
+   7. ZOOM
+   ========================================================================= */
+function applyZoom(){
+  canvasEl.style.transform = `scale(${state.zoom})`;
+  document.getElementById('zoomLabel').textContent = Math.round(state.zoom*100)+'%';
+  requestAnimationFrame(updateGeometry);
+}
+document.getElementById('zoomIn').onclick = ()=>{ state.zoom = Math.min(1.5, +(state.zoom+0.1).toFixed(2)); applyZoom(); };
+document.getElementById('zoomOut').onclick = ()=>{ state.zoom = Math.max(0.5, +(state.zoom-0.1).toFixed(2)); applyZoom(); };
+window.addEventListener('resize', ()=> updateGeometry());
+
+/* =========================================================================
+   8. MARKDOWN EXPORT
+   ========================================================================= */
+function mmEscape(s){
+  return (s||'')
+    .replace(/"/g,"'").replace(/\|/g,'/').replace(/\n/g,' ')
+    .replace(/[\[\]]/g,'／').replace(/[{}]/g,'（）').replace(/[#;]/g,'-');
+}
+function mmNodeDecl(n){
+  const label = mmEscape(n.label || (n.type==='decision'?'判斷':'步驟'));
+  return n.type==='decision' ? `${n.id}{"${label}"}` : `${n.id}["${label}"]`;
+}
+function mmEdge(e){
+  const arrow = e.dashed ? '-.->' : '-->';
+  return e.label ? `${e.from} ${arrow}|${mmEscape(e.label)}| ${e.to}` : `${e.from} ${arrow} ${e.to}`;
+}
+function bulletList(text){
+  if(!text || !text.trim()) return '_（未填寫）_\n';
+  return text.split('\n').filter(l=>l.trim()).map(l=>`- ${l.trim()}`).join('\n') + '\n';
+}
+function buildOverviewMermaid(){
+  let lines = ['flowchart LR'];
+  MODEL.tasks.forEach(task=>{
+    lines.push(`  subgraph SG_${task.id}["${mmEscape(task.name)}"]`);
+    task.nodes.forEach(n=> lines.push(`    ${mmNodeDecl(n)}`));
+    lines.push(`  end`);
+  });
+  MODEL.edges.forEach(e=> lines.push(`  ${mmEdge(e)}`));
+  return lines.join('\n');
+}
+function buildTaskMermaid(task){
+  if(!task.nodes.length) return null;
+  const ids = new Set(task.nodes.map(n=>n.id));
+  let lines = ['flowchart LR'];
+  task.nodes.forEach(n=> lines.push(`  ${mmNodeDecl(n)}`));
+  MODEL.edges.filter(e=> ids.has(e.from) && ids.has(e.to)).forEach(e=> lines.push(`  ${mmEdge(e)}`));
+  return lines.join('\n');
+}
+
+function exportMarkdown(){
+  const lines = [];
+  lines.push(`# ${MODEL.name || 'Workflow'}`);
+  lines.push('');
+  lines.push(`6 階段流程：${STAGE_DEFS.map(s=>s.title).join(' → ')}`);
+  lines.push('');
+  lines.push('圖例：方形 = 步驟（名稱＋描述）；菱形 = 判斷；實線 = 正常流程；虛線 = 退回 / Rollback。每個任務各自一條橫貫六階段的流程。');
+  lines.push('');
+  lines.push('## Overview Diagram');
+  lines.push('');
+  lines.push('```mermaid');
+  lines.push(buildOverviewMermaid());
+  lines.push('```');
+  lines.push('');
+  lines.push('---');
+
+  MODEL.tasks.forEach((task, idx)=>{
+    lines.push('');
+    lines.push(`## ${idx+1} · ${task.name}`);
+    const mm = buildTaskMermaid(task);
+    if(mm){
+      lines.push(''); lines.push('```mermaid'); lines.push(mm); lines.push('```');
+    }
+    effectiveStageDefs().forEach(sd=>{
+      const meta = task.stageMeta[sd.id];
+      const has = meta && (meta.entry.trim() || meta.decision.trim() || meta.exit.trim() || meta.deliverables.trim());
+      if(!has) return;
+      lines.push(`\n### ${sd.title}`);
+      lines.push('\n**Entry Criteria**\n'); lines.push(bulletList(meta.entry));
+      lines.push('**Decision Questions**\n'); lines.push(bulletList(meta.decision));
+      lines.push('**Exit Criteria**\n'); lines.push(bulletList(meta.exit));
+      lines.push('**Deliverables**\n'); lines.push(bulletList(meta.deliverables));
+    });
+    const noted = task.nodes.filter(n=> n.note || n.owner);
+    if(noted.length){
+      lines.push('\n**Step 說明**\n');
+      lines.push(noted.map(n=>{
+        const rolePart = n.owner ? `（當下角色：${n.owner}）` : '';
+        const notePart = n.note ? `：${n.note}` : '';
+        return `- **${n.label||n.type}**${rolePart}${notePart}`;
+      }).join('\n')+'\n');
+    }
+    lines.push('\n---');
+  });
+
+  lines.push('\n## Task Summary\n');
+  lines.push('| # | Task | 節點數 |');
+  lines.push('|---|------|--------|');
+  MODEL.tasks.forEach((task, idx)=> lines.push(`| ${idx+1} | ${task.name} | ${task.nodes.length} |`));
+
+  return lines.join('\n');
+}
+
+function download(filename, text){
+  const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+document.getElementById('exportMdBtn').onclick = ()=> download((MODEL.name||'flow').replace(/\s+/g,'_')+'.md', exportMarkdown());
+document.getElementById('exportJsonBtn').onclick = ()=> download((MODEL.name||'flow').replace(/\s+/g,'_')+'.json', JSON.stringify(MODEL, null, 2));
+
+document.getElementById('importJsonInput').addEventListener('change', function(e){
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const parsed = JSON.parse(reader.result);
+      if(!parsed.tasks) parsed.tasks = [];
+      if(!parsed.edges) parsed.edges = [];
+      if(!parsed.stagePurpose) parsed.stagePurpose = {};
+      if(!parsed.units) parsed.units = [];
+      STAGE_DEFS.forEach(sd=>{ if(parsed.stagePurpose[sd.id]==null) parsed.stagePurpose[sd.id] = ''; });
+      parsed.units.forEach(u=>{
+        if(typeof u.collapsed !== 'boolean') u.collapsed = false;
+        if(!u.roles) u.roles = [];
+        u.roles.forEach(r=>{ if(typeof r.collapsed !== 'boolean') r.collapsed = false; });
+      });
+      parsed.tasks.forEach(t=>{
+        if(!t.stageMeta) t.stageMeta = {};
+        STAGE_DEFS.forEach(sd=>{ if(!t.stageMeta[sd.id]) t.stageMeta[sd.id] = {entry:'',decision:'',exit:'',deliverables:''}; });
+        if(typeof t.collapsed !== 'boolean') t.collapsed = false;
+        if(t.unitId===undefined) t.unitId = null;
+        if(t.roleId===undefined) t.roleId = null;
+      });
+      MODEL = parsed;
+      renderAll();
+    }catch(err){ alert('JSON 格式錯誤，無法匯入：'+err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+/* =========================================================================
+   8b. MERGE-IMPORT — for consolidating flows collected by different people.
+   Unlike the "取代整份" import above (which wholesale replaces MODEL), this
+   APPENDS an incoming file's tasks/edges into the current MODEL without
+   touching anything already here:
+   - every node id / edge id from the incoming file is remapped through this
+     session's own uid() counter, so two independently-created files (each
+     restarting their own uid counter from 1) can never collide once merged.
+   - units/roles are matched by NAME (not id) against what's already in
+     MODEL, so if three people each add a task under a unit/role they typed
+     with the same name (e.g. "UX部門"／"設計師"), they land under ONE shared
+     unit/role instead of three duplicate org branches. If a unit/role name
+     doesn't exist yet, it's created.
+   - stagePurpose text is only filled in where the CURRENT model's entry is
+     still blank — an incoming file can never overwrite text Jerry already
+     wrote for a stage.
+   Caveat worth knowing: task NAMES are not deduplicated — if two people both
+   named a task "網站建置", merging both files produces two separate task rows
+   with that same name (this is usually fine since each is tagged with its own
+   unit/role, but worth a glance after a merge). ========================== */
+function mergeImportModel(incoming){
+  if(!incoming.tasks) incoming.tasks = [];
+  if(!incoming.edges) incoming.edges = [];
+  if(!incoming.units) incoming.units = [];
+  if(!incoming.stagePurpose) incoming.stagePurpose = {};
+  if(!MODEL.units) MODEL.units = [];
+
+  // matched by normalizeOrgName() (trim + uppercase English) rather than the
+  // raw string, so an older file that saved "Div4" still merges into the
+  // same branch as one that saved "DIV4" or "div4". The name actually
+  // stored/created is also normalized, so any pre-existing un-normalized
+  // unit/role already in MODEL (created before this fix) gets cleaned up
+  // the first time something merges into it.
+  function findOrCreateUnit(name){
+    const norm = normalizeOrgName(name);
+    let u = MODEL.units.find(u=> normalizeOrgName(u.name)===norm);
+    if(!u){ u = { id: uid('u'), name: norm||'未命名單位', collapsed:false, roles:[] }; MODEL.units.push(u); }
+    else if(u.name !== norm && norm) u.name = norm;
+    return u;
+  }
+  function findOrCreateRole(unit, name){
+    if(!unit.roles) unit.roles = [];
+    const norm = normalizeOrgName(name);
+    let r = unit.roles.find(r=> normalizeOrgName(r.name)===norm);
+    if(!r){ r = { id: uid('r'), name: norm||'未命名角色', collapsed:false }; unit.roles.push(r); }
+    else if(r.name !== norm && norm) r.name = norm;
+    return r;
+  }
+  const unitMap = {}, roleMap = {}; // incoming unit/role id -> resolved unit/role object in MODEL
+  incoming.units.forEach(iu=>{
+    const u = findOrCreateUnit(iu.name);
+    unitMap[iu.id] = u;
+    (iu.roles||[]).forEach(ir=>{ roleMap[ir.id] = findOrCreateRole(u, ir.name); });
+  });
+
+  const nodeIdMap = {};
+  let importedTaskCount = 0, importedEdgeCount = 0;
+  incoming.tasks.forEach(t=>{
+    const newNodes = (t.nodes||[]).map(n=>{
+      const nid = uid('n');
+      nodeIdMap[n.id] = nid;
+      return Object.assign({}, n, { id: nid });
+    });
+    const stageMeta = t.stageMeta || {};
+    STAGE_DEFS.forEach(sd=>{ if(!stageMeta[sd.id]) stageMeta[sd.id] = {entry:'',decision:'',exit:'',deliverables:''}; });
+    const resolvedUnit = (t.unitId!=null) ? unitMap[t.unitId] : null;
+    const resolvedRole = (t.roleId!=null) ? roleMap[t.roleId] : null;
+    MODEL.tasks.push({
+      id: uid('t'),
+      name: t.name || '新任務',
+      collapsed: !!t.collapsed,
+      unitId: resolvedUnit ? resolvedUnit.id : null,
+      roleId: resolvedRole ? resolvedRole.id : null,
+      stageMeta,
+      nodes: newNodes,
+    });
+    importedTaskCount++;
+  });
+
+  incoming.edges.forEach(e=>{
+    if(nodeIdMap[e.from]==null || nodeIdMap[e.to]==null) return; // endpoint wasn't part of any imported task's nodes
+    MODEL.edges.push(Object.assign({}, e, { id: uid('e'), from: nodeIdMap[e.from], to: nodeIdMap[e.to] }));
+    importedEdgeCount++;
+  });
+
+  STAGE_DEFS.forEach(sd=>{
+    const cur = (MODEL.stagePurpose[sd.id]||'').trim();
+    if(!cur && incoming.stagePurpose[sd.id]) MODEL.stagePurpose[sd.id] = incoming.stagePurpose[sd.id];
+  });
+
+  return { importedTaskCount, importedEdgeCount };
+}
+
+document.getElementById('mergeImportInput').addEventListener('change', function(e){
+  const file = e.target.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const parsed = JSON.parse(reader.result);
+      const { importedTaskCount, importedEdgeCount } = mergeImportModel(parsed);
+      renderAll();
+      alert(`合併匯入完成：新增了 ${importedTaskCount} 個任務、${importedEdgeCount} 條連接線，原有內容未被覆蓋。`);
+    }catch(err){ alert('JSON 格式錯誤，無法合併匯入：'+err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+document.getElementById('addUnitBtn').onclick = ()=>{
+  const name = prompt('新單位名稱（例如：UX部門 / UI部門 / PM部門）：', '新單位');
+  if(name===null) return;
+  if(!MODEL.units) MODEL.units = [];
+  MODEL.units.push({ id: uid('u'), name: normalizeOrgName(name) || '新單位', collapsed:false, roles:[] });
+  renderAll();
+};
+
+document.getElementById('resetBtn').onclick = ()=>{
+  if(!confirm('確定要清空整個畫布嗎？此動作無法復原（建議先匯出 JSON 備份）。')) return;
+  MODEL = blankModel();
+  renderAll();
+};
+
+/* =========================================================================
+   8c. 雲端存讀 — for the online multi-person rollout: 基層填寫者存到 Supabase
+   而不是下載檔案，主管透過另一支 manager-view.html 頁面憑 PIN 讀取彙整結果。
+   身份（姓名/單位/角色）只問一次，存在 localStorage，之後每次雲端存/讀都直
+   接沿用，不用每次重新輸入。單位/角色欄位一律用 normalizeOrgName() 正規化，
+   跟本機的合併匯入邏輯保持一致（否則雲端這邊又會重演 Div4/DIV4 的問題）。
+   ========================================================================= */
+const IDENTITY_KEY = 'flowBuilderIdentity';
+function getIdentity(){
+  try{ return JSON.parse(localStorage.getItem(IDENTITY_KEY) || 'null'); }
+  catch(e){ return null; }
+}
+function saveIdentity(identity){
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+}
+/* Ensures we have a name/unit/role before doing a cloud action. If we
+   already have one saved, calls back immediately; otherwise opens the small
+   identity dialog and only calls back once the person confirms it (never
+   calls back if they cancel). */
+function ensureIdentity(onReady){
+  const existing = getIdentity();
+  if(existing){ onReady(existing); return; }
+  const modal = document.getElementById('identityModal');
+  const nameInput = document.getElementById('identityNameInput');
+  const unitInput = document.getElementById('identityUnitInput');
+  const roleInput = document.getElementById('identityRoleInput');
+  // pre-fill the unit/role suggestion lists from whatever units/roles already
+  // exist locally — pure convenience (autocomplete), typing anything else is
+  // still fine.
+  const unitList = document.getElementById('identityUnitList');
+  const roleList = document.getElementById('identityRoleList');
+  unitList.innerHTML = (MODEL.units||[]).map(u=>`<option value="${u.name}"></option>`).join('');
+  roleList.innerHTML = (MODEL.units||[]).flatMap(u=>(u.roles||[])).map(r=>`<option value="${r.name}"></option>`).join('');
+  modal.classList.add('open');
+  nameInput.focus();
+  function cleanup(){
+    modal.classList.remove('open');
+    confirmBtn.removeEventListener('click', onConfirm);
+    cancelBtn.removeEventListener('click', onCancel);
+  }
+  const confirmBtn = document.getElementById('identityConfirmBtn');
+  const cancelBtn = document.getElementById('identityCancelBtn');
+  function onConfirm(){
+    const name = nameInput.value.trim();
+    const unit = normalizeOrgName(unitInput.value);
+    const role = normalizeOrgName(roleInput.value);
+    if(!name || !unit || !role){ alert('姓名／單位／角色都要填才能繼續。'); return; }
+    const identity = { name, unit, role };
+    saveIdentity(identity);
+    cleanup();
+    loadUnitStagesFor(identity.unit); // pull in this unit's own hats, if its manager has customized them (see below)
+    onReady(identity);
+  }
+  function onCancel(){ cleanup(); }
+  confirmBtn.addEventListener('click', onConfirm);
+  cancelBtn.addEventListener('click', onCancel);
+}
+/* 帽子是「綁在單位上」的（見 manager-view.html 跟 SETUP.md 的說明）——不同
+   BU的工作流程可能完全不同，所以由各單位主管自己用單位PIN定義。這裡只負責
+   「讀」：一旦知道使用者的單位，就去問雲端這個單位有沒有自訂過帽子，有的話
+   整組換掉本機預設的 STAGE_DEFS 再重畫一次；沒有（回傳null）就什麼都不做，
+   繼續用內建預設的 6 個帽子——離線使用者、還沒設定雲端連線的人完全不受影響。
+   一般員工在這個檔案裡完全沒有"寫"的入口，只有讀取，符合"員工不能編輯帽子"
+   的要求。 */
+async function loadUnitStagesFor(unit){
+  if(!supabaseClient || !unit) return;
+  try{
+    const { data, error } = await supabaseClient.rpc('get_unit_stages', { p_unit: unit });
+    if(error) return; // no error surfaced to the user here — this is a silent best-effort refresh, not a user-initiated action
+    // reset to the built-in default first — otherwise switching identity to a
+    // unit that hasn't customized its hats yet would incorrectly keep
+    // whatever a PREVIOUSLY-loaded unit's custom hats were.
+    STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s}));
+    if(!data || !Array.isArray(data) || !data.length){ renderAll(); return; }
+    const valid = data.every(s=> s && typeof s.id === 'string' && typeof s.title === 'string' && typeof s.color === 'string');
+    if(!valid){ renderAll(); return; }
+    STAGE_DEFS = data;
+    renderAll();
+  }catch(err){ /* offline or misconfigured — keep whatever STAGE_DEFS already is */ }
+}
+function requireSupabase(){
+  if(supabaseClient) return true;
+  alert('尚未設定雲端連線（SUPABASE_URL / SUPABASE_ANON_KEY 還是空的）。這個檔案本身沒問題，本機所有功能都能正常用，只是雲端存檔/讀取要先照 SETUP.md 設定好 Supabase 才能用。');
+  return false;
+}
+document.getElementById('cloudSaveBtn').onclick = ()=>{
+  if(!requireSupabase()) return;
+  ensureIdentity(async (identity)=>{
+    try{
+      const { error } = await supabaseClient.from('submissions').upsert({
+        submitter_name: identity.name,
+        submitter_unit: identity.unit,
+        submitter_role: identity.role,
+        model_json: MODEL,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'submitter_name,submitter_unit,submitter_role' });
+      if(error) throw error;
+      alert(`已存到雲端（${identity.unit} / ${identity.role} / ${identity.name}）。`);
+    }catch(err){
+      alert('雲端存檔失敗：' + (err.message || err));
+    }
+  });
+};
+document.getElementById('cloudLoadBtn').onclick = ()=>{
+  if(!requireSupabase()) return;
+  ensureIdentity(async (identity)=>{
+    if(MODEL.tasks.length && !confirm('讀回雲端資料會覆蓋目前畫布上的內容（建議先匯出JSON備份），確定要繼續嗎？')) return;
+    try{
+      const { data, error } = await supabaseClient.rpc('get_my_submission', {
+        p_name: identity.name, p_unit: identity.unit, p_role: identity.role,
+      });
+      if(error) throw error;
+      if(!data || !data.length){ alert('雲端上還沒有你的存檔紀錄（姓名/單位/角色：'+identity.name+' / '+identity.unit+' / '+identity.role+'）。'); return; }
+      MODEL = data[0].model_json;
+      if(!MODEL.units) MODEL.units = [];
+      renderAll();
+      alert('已從雲端讀回你的資料。');
+    }catch(err){
+      alert('雲端讀取失敗：' + (err.message || err));
+    }
+  });
+};
+document.getElementById('reloadStagesBtn').onclick = ()=>{
+  if(!requireSupabase()) return;
+  ensureIdentity(async (identity)=>{
+    const before = JSON.stringify(STAGE_DEFS);
+    await loadUnitStagesFor(identity.unit);
+    alert(JSON.stringify(STAGE_DEFS) === before
+      ? `目前雲端上「${identity.unit}」還沒有自訂帽子（或跟現在畫面上的一樣），沒有變化。`
+      : `已套用「${identity.unit}」最新的帽子設定。`);
+  });
+};
+
+/* Export ▾ dropdown — toggles open/closed, closes on any click inside it
+   (including a file-input choice, since a native file dialog is about to
+   take over the screen anyway) or on any click elsewhere on the page. */
+(function(){
+  const btn = document.getElementById('exportMenuBtn');
+  const menu = document.getElementById('exportMenu');
+  btn.addEventListener('click', (e)=>{ e.stopPropagation(); menu.classList.toggle('open'); });
+  menu.addEventListener('click', ()=> menu.classList.remove('open'));
+  document.addEventListener('click', (e)=>{
+    if(menu.classList.contains('open') && !e.target.closest('#exportDropdown')) menu.classList.remove('open');
+  });
+})();
+
+/* =========================================================================
+   9b. 教學與範例 modal — the 範例 (examples) side deliberately does NOT touch
+   MODEL at all. It has its own node index, its own canvas element, and
+   builds every node/edge with plain textContent (no contentEditable) and no
+   event listeners — so there is no "read-only flag" to thread through the
+   real interactive renderer, and no way 清空畫布 / 匯出 / 合併匯入 JSON can
+   ever see or affect example content, or vice versa. buildPresetUX()/
+   buildPresetUI() (still in the file, unused by the main app since the old
+   "載入範例" button was removed) are reused here purely as example data
+   sources — each call mints its own ids off the shared uid() counter, which
+   is harmless since those ids never mix into MODEL.
+   ========================================================================= */
+const EXAMPLES = {
+  ui: { label:'UI Workflow', unitName:'Div4', roleName:'UI', build: buildPresetUI },
+  ux: { label:'UX Workflow Lifecycle', unitName:'Div4', roleName:'UX', build: buildPresetUX },
+};
+const exampleNodeIndex = {};
+// tracks which example is currently selected so the 範例 tab can re-render
+// with correct geometry once it actually becomes visible (see openHelpModalBtn
+// / .modal-tab wiring near the bottom of the file for why this is needed —
+// getBoundingClientRect() on a display:none subtree returns a zero rect, so
+// rendering while the tab is hidden produces edges with no visible line).
+let currentExampleKey = 'ui';
+
+function exampleRectOf(el, canvasRect){
+  const r = el.getBoundingClientRect();
+  const cx = (r.left+r.right)/2 - canvasRect.left, cy = (r.top+r.bottom)/2 - canvasRect.top;
+  return { left:r.left-canvasRect.left, right:r.right-canvasRect.left, top:r.top-canvasRect.top, bottom:r.bottom-canvasRect.top, cx, cy };
+}
+function exampleSideAnchor(nodeId, side){
+  const info = exampleNodeIndex[nodeId];
+  if(!info || !info.el) return { x:0, y:0 };
+  const canvasRect = document.getElementById('exampleCanvas').getBoundingClientRect();
+  const r = exampleRectOf(info.el, canvasRect);
+  if(side==='top') return { x:(r.left+r.right)/2, y:r.top };
+  if(side==='bottom') return { x:(r.left+r.right)/2, y:r.bottom };
+  if(side==='left') return { x:r.left, y:(r.top+r.bottom)/2 };
+  return { x:r.right, y:(r.top+r.bottom)/2 };
+}
+function renderExampleNode(n, gx){
+  const el = document.createElement('div');
+  el.className = 'node ' + n.type + ' example-node';
+  el.style.left = gx+'px'; el.style.top = n.y+'px';
+  const stageDef = STAGE_DEFS.find(s=>s.id===n.stageId);
+  if(n.type==='decision'){
+    const bg = document.createElement('div'); bg.className='diamond-bg';
+    if(stageDef) bg.style.borderColor = stageDef.color;
+    el.appendChild(bg);
+  }
+  const body = document.createElement('div'); body.className='node-body';
+  if(stageDef && n.type!=='decision') body.style.borderColor = stageDef.color;
+  const title = document.createElement('div'); title.className='node-title'; title.textContent = n.label||'';
+  body.appendChild(title);
+  if(n.owner){
+    const owner = document.createElement('div'); owner.className='node-owner'; owner.textContent = n.owner;
+    body.appendChild(owner);
+  }
+  const desc = document.createElement('div'); desc.className='node-desc'; desc.textContent = n.note||'';
+  body.appendChild(desc);
+  el.appendChild(body);
+  return el;
+}
+function renderExample(key){
+  currentExampleKey = key;
+  const def = EXAMPLES[key];
+  const model = def.build();
+  const task = model.tasks[0];
+  const edges = model.edges;
+
+  document.querySelectorAll('.example-pick').forEach(b=> b.classList.toggle('active', b.dataset.example===key));
+
+  // per-stage column widths sized to fit only THIS example's own nodes
+  const colWidth = {}, colStart = {};
+  STAGE_DEFS.forEach(sd=> colWidth[sd.id] = STAGE_WIDTH);
+  task.nodes.forEach(n=>{
+    const w = n.type==='decision' ? DIA_W : RECT_W;
+    const needed = n.x + w + 60;
+    if(needed > colWidth[n.stageId]) colWidth[n.stageId] = needed;
+  });
+  let acc = 0;
+  STAGE_DEFS.forEach(sd=>{ colStart[sd.id] = acc; acc += colWidth[sd.id]; });
+  const totalWidth = acc;
+  const gX = (n)=> colStart[n.stageId] + n.x;
+
+  const headerRow = document.createElement('div');
+  headerRow.className = 'stage-header-row';
+  const spacer = document.createElement('div'); spacer.className = 'row-label-spacer';
+  headerRow.appendChild(spacer);
+  STAGE_DEFS.forEach(sd=>{
+    const cell = document.createElement('div'); cell.className = 'stage-header-cell';
+    cell.style.flex = '0 0 ' + colWidth[sd.id] + 'px'; cell.style.width = colWidth[sd.id] + 'px';
+    cell.style.background = tint(sd.color, 0.09);
+    const head = document.createElement('div'); head.className = 'stage-head-title-row';
+    head.style.setProperty('--stage-color', sd.color);
+    head.innerHTML = `<span class="stage-num" style="background:${sd.color}">${STAGE_DEFS.indexOf(sd)+1}</span><span class="stage-title">${sd.title}</span>`;
+    const purpose = document.createElement('div'); purpose.className = 'stage-purpose'; purpose.textContent = model.stagePurpose[sd.id]||'';
+    cell.appendChild(head); cell.appendChild(purpose);
+    headerRow.appendChild(cell);
+  });
+
+  const outer = document.createElement('div'); outer.className = 'task-row-outer';
+  const row = document.createElement('div'); row.className = 'task-row';
+  const label = document.createElement('div'); label.className = 'task-label';
+  const tag = document.createElement('div'); tag.className = 'task-tag'; tag.textContent = def.unitName + ' / ' + def.roleName;
+  const nameEl = document.createElement('div'); nameEl.className = 'task-name'; nameEl.textContent = task.name;
+  label.appendChild(tag); label.appendChild(nameEl);
+  row.appendChild(label);
+
+  const wrap = document.createElement('div'); wrap.className = 'task-canvas-wrap';
+  const bands = document.createElement('div'); bands.className = 'task-bg-bands';
+  STAGE_DEFS.forEach(sd=>{
+    const band = document.createElement('div'); band.className = 'task-bg-band';
+    band.style.flex = '0 0 ' + colWidth[sd.id] + 'px'; band.style.width = colWidth[sd.id] + 'px';
+    band.style.background = tint(sd.color, 0.05);
+    bands.appendChild(band);
+  });
+  wrap.appendChild(bands);
+
+  const track = document.createElement('div'); track.className = 'task-track';
+  let maxY = 150;
+  Object.keys(exampleNodeIndex).forEach(k=> delete exampleNodeIndex[k]);
+  task.nodes.forEach(n=>{
+    const h = n.type==='decision' ? DIA_H : RECT_H;
+    maxY = Math.max(maxY, n.y+h+40);
+    const el = renderExampleNode(n, gX(n));
+    track.appendChild(el);
+    exampleNodeIndex[n.id] = { node:n, el };
+  });
+  track.style.minWidth = totalWidth+'px';
+  track.style.minHeight = maxY+'px';
+  wrap.appendChild(track);
+  row.appendChild(wrap);
+  outer.appendChild(row);
+
+  const exCanvas = document.getElementById('exampleCanvas');
+  exCanvas.querySelectorAll('.stage-header-row, .task-row-outer').forEach(el=>el.remove());
+  const exSvg = document.getElementById('exampleEdgeSvg');
+  exCanvas.insertBefore(headerRow, exSvg);
+  exCanvas.insertBefore(outer, exSvg);
+
+  // static org tree: just Div4 > (UI or UX) > this one example task, no
+  // add/delete/collapse affordances since the whole tab is read-only.
+  const orgTreeEl = document.getElementById('exampleOrgTree');
+  orgTreeEl.innerHTML = '';
+  const unitRow = document.createElement('div'); unitRow.className = 'org-unit';
+  unitRow.innerHTML = `<div class="org-row org-unit-head"><span class="org-name">${def.unitName}</span></div>`;
+  const roleWrap = document.createElement('div'); roleWrap.className = 'org-roles';
+  roleWrap.innerHTML = `<div class="org-role"><div class="org-row org-role-head"><span class="org-name">${def.roleName}</span></div>
+    <div class="org-tasks"><div class="org-task-chip active" style="cursor:default;">${task.name}</div></div></div>`;
+  unitRow.appendChild(roleWrap);
+  orgTreeEl.appendChild(unitRow);
+
+  requestAnimationFrame(()=>{
+    exSvg.setAttribute('width', totalWidth); exSvg.setAttribute('height', maxY);
+    exSvg.setAttribute('viewBox', `0 0 ${totalWidth} ${maxY}`);
+    if(!exSvg.querySelector('defs')){
+      exSvg.insertAdjacentHTML('afterbegin', `<defs>
+        <marker id="exArrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7a7f8c"/></marker>
+        <marker id="exArrowRed" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker>
+      </defs>`);
+    }
+    // scoped to just OUR edge paths — a bare 'path' selector also matches the
+    // arrowhead <path> nested inside the <marker> defs above, deleting the
+    // marker's own shape and leaving every line with no visible arrowhead at
+    // all (exactly what "案例flow都沒有箭頭，不知去向" was — this only
+    // matters here because the example viewer builds its own tiny defs block
+    // rather than sharing the main canvas's #edgeSvg one).
+    exSvg.querySelectorAll('path.example-edge-path').forEach(p=>p.remove());
+    const exDeco = document.getElementById('exampleEdgeDeco');
+    exDeco.innerHTML = ''; exDeco.style.width = totalWidth+'px'; exDeco.style.height = maxY+'px';
+    const canvasRect = exCanvas.getBoundingClientRect();
+    edges.forEach(edge=>{
+      const fromInfo = exampleNodeIndex[edge.from], toInfo = exampleNodeIndex[edge.to];
+      if(!fromInfo || !toInfo) return;
+      const rFrom = exampleRectOf(fromInfo.el, canvasRect), rTo = exampleRectOf(toInfo.el, canvasRect);
+      const p1 = exampleSideAnchor(edge.from, edge.fromSide), p2 = exampleSideAnchor(edge.to, edge.toSide);
+      const { d, pts } = buildOrthogonalPath(p1, edge.fromSide, p2, edge.toSide, rFrom, rTo, edge.bendOffset||0);
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('class', 'example-edge-path');
+      path.setAttribute('d', d);
+      path.setAttribute('stroke', edge.dashed ? '#c0392b' : '#8a8f9c');
+      path.setAttribute('stroke-width', edge.dashed ? '1.75' : '2');
+      if(edge.dashed) path.setAttribute('stroke-dasharray','6,5');
+      path.setAttribute('fill','none');
+      path.setAttribute('marker-end', edge.dashed ? 'url(#exArrowRed)' : 'url(#exArrow)');
+      exSvg.appendChild(path);
+      if(edge.label){
+        const mid = pathMidpoint(pts);
+        const lbl = document.createElement('div');
+        lbl.className = 'edge-label filled' + (edge.dashed ? ' dashed-label' : '');
+        lbl.style.position = 'absolute'; lbl.style.left = mid.x+'px'; lbl.style.top = mid.y+'px'; lbl.style.transform = 'translate(-50%,-50%)';
+        lbl.textContent = edge.label;
+        exDeco.appendChild(lbl);
+      }
+    });
+  });
+}
+
+const helpModal = document.getElementById('helpModal');
+document.getElementById('openHelpModalBtn').onclick = ()=>{
+  helpModal.classList.add('open');
+  // pre-build the example DOM even though the 範例 tab starts hidden behind
+  // 教學 — this is harmless (just wasted geometry) because the tab-switch
+  // handler below re-renders (with correct rects) the moment the tab
+  // actually becomes visible. Do NOT rely on this call alone: a display:none
+  // ancestor makes every getBoundingClientRect() in renderExample() return a
+  // zero rect, which is why lines used to be invisible until the user
+  // switched examples (the .example-pick click below was what accidentally
+  // "fixed" it, by re-rendering once the tab happened to be visible already).
+  renderExample(currentExampleKey);
+};
+document.getElementById('closeHelpModal').onclick = ()=> helpModal.classList.remove('open');
+helpModal.addEventListener('mousedown', (e)=>{ if(e.target === helpModal) helpModal.classList.remove('open'); });
+document.querySelectorAll('.modal-tab').forEach(tabBtn=>{
+  tabBtn.addEventListener('click', ()=>{
+    document.querySelectorAll('.modal-tab').forEach(b=> b.classList.toggle('active', b===tabBtn));
+    document.querySelectorAll('.modal-tab-content').forEach(c=> c.classList.toggle('active', c.id === tabBtn.dataset.tab+'Tab'));
+    // re-render now that .active (display:block) has just been applied
+    // synchronously above — fixes the zero-rect problem described above for
+    // the common case where 範例 is opened for the first time.
+    if(tabBtn.dataset.tab === 'examples') renderExample(currentExampleKey);
+  });
+});
+document.querySelectorAll('.example-pick').forEach(btn=>{
+  btn.addEventListener('click', ()=> renderExample(btn.dataset.example));
+});
+
+/* =========================================================================
+   9. INIT — starts blank (not the built-in UX example) since this file is
+   meant to be handed out to other units; buildPresetUX()/buildPresetUI()
+   are still here and reachable from the console if the examples are ever
+   needed again, just no longer wired to any visible button.
+   ========================================================================= */
+MODEL = blankModel();
+renderAll();
+// returning user on a device that already has a saved identity: pull in
+// their unit's current hats right away, rather than waiting for them to
+// click a cloud button first — offline users (no saved identity, or no
+// Supabase configured) are completely unaffected.
+(function(){
+  const savedIdentity = getIdentity();
+  if(savedIdentity) loadUnitStagesFor(savedIdentity.unit);
+})();
+</script>
+</body>
+</html>

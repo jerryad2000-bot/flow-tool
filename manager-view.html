@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=1280, initial-scale=1.0" />
+<title>Flow 繪製工具 — 主管彙整檢視</title>
+<!-- 這頁是給主管看的唯讀彙整檢視，跟 flow-builder.html 是同一套視覺／繪圖邏輯，
+     但完全獨立的檔案 —— 不會讀寫本機瀏覽器的任何 MODEL 狀態，所有資料都是
+     即時從 Supabase 抓回來、在記憶體裡彙整完就畫出來，重新整理網頁就會重抓
+     一次最新的。詳細建置步驟見 SETUP.md。 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+
+:root{
+  --bg:#eef0f4; --surface:#ffffff; --border:#e0e2e8; --border-soft:#edeef2;
+  --ink:#16181d; --muted:#6b7280; --muted-soft:#9aa0a6;
+  --accent:#5e6ad2; --accent-ink:#4547a9; --accent-soft:#edeeff;
+  --rect-bg:#eef2ff; --rect-border:#5e6ad2;
+  --dia-bg:#fff7e6; --dia-border:#d9a441;
+  --red:#c0392b; --red-soft:#fdecea;
+  --stage-w:620px; --label-w:150px;
+  --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.07);
+  /* Morandi (muted/dusty) palette — scoped to the toolbar, legend bar, left
+     task-label column, and the org/file side panel. Canvas/node/edge colors
+     (stage colors, --accent, rect/diamond colors) are left untouched since
+     they carry semantic meaning (which stage, selection state, etc.). */
+  --m-bg:#e7e2da; --m-surface:#f1ede6; --m-border:#d6cec1;
+  --m-ink:#4a4238; --m-muted:#8f8374; --m-accent:#a6877a; --m-accent-ink:#8a6c60;
+  --m-accent-soft:#efe3da; --m-danger:#b3695a;
+  /* explicit swatch colors Jerry picked for the two darker, more saturated
+     bands: #66828E for the top toolbar, #586D80 for the left task-name
+     column. These are dark enough that text/icons inside them switch to
+     white rather than the --m-ink/--m-muted used elsewhere. */
+  --tb-bg:#66828e; --tb-bg-dark:#56717c;
+  --tl-bg:#586d80; --tl-bg-dark:#46596a;
+  /* deeper warm-taupe Morandi for the org-structure side panel — a distinct
+     hue family from the cool teal toolbar/task-list bands above, but still
+     within the same dusty/muted Morandi register (shares its hue with
+     --m-accent/--m-danger) so the two bands read as coordinated, not clashing. */
+  --sp-bg:#8a7a6d; --sp-bg-dark:#6f6156;
+}
+*{box-sizing:border-box;}
+html,body{margin:0; height:100%;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Noto Sans TC",sans-serif; background:var(--bg); color:var(--ink); font-size:13.5px;}
+button{font-family:inherit; cursor:pointer;}
+input,textarea{font-family:inherit;}
+
+/* ---------- toolbar ---------- */
+.toolbar{position:sticky; top:0; z-index:100; background:var(--tb-bg); border-bottom:1px solid var(--tb-bg-dark);
+  display:flex; align-items:center; gap:10px; padding:10px 18px; flex-wrap:wrap;}
+.brand{display:flex; align-items:center; gap:8px; font-weight:800; font-size:14.5px; white-space:nowrap; color:#fff;}
+.brand .dot{width:9px; height:9px; border-radius:50%; background:#fff;}
+.tbtn{border:1px solid var(--m-border); background:var(--m-surface); color:var(--m-ink); border-radius:8px; padding:6px 11px; font-size:12.5px; white-space:nowrap; transition:.15s;}
+.tbtn:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
+.tbtn.primary{background:var(--m-accent); color:#fff; border-color:var(--m-accent);}
+.tbtn.primary:hover{background:var(--m-accent-ink); border-color:var(--m-accent-ink); color:#fff;}
+.zoomgroup{display:flex; align-items:center; gap:2px; border:1px solid var(--m-border); border-radius:8px; padding:2px; background:var(--m-surface);}
+.zoomgroup button{border:none; background:transparent; width:22px; height:22px; border-radius:6px; font-size:13px; color:var(--m-ink);}
+.zoomgroup button:hover{background:var(--m-bg);}
+.zoomgroup .zlabel{font-size:11px; color:var(--m-muted); width:36px; text-align:center;}
+.tb-right{margin-left:auto; display:flex; gap:8px; align-items:center;}
+
+/* single "Export ▾" dropdown collecting every import/export/reset action that
+   used to be spread across the toolbar and the side panel — everything
+   file-related now lives in one place, top-right. */
+.export-dropdown{position:relative;}
+.export-menu{display:none; flex-direction:column; gap:2px; position:absolute; top:calc(100% + 6px); right:0; min-width:230px;
+  background:var(--m-surface); border:1px solid var(--m-border); border-radius:10px; padding:6px; box-shadow:0 8px 22px rgba(0,0,0,.2); z-index:200;}
+.export-menu.open{display:flex;}
+.export-item{display:block; width:100%; text-align:left; border:none; background:transparent; color:var(--m-ink);
+  border-radius:7px; padding:8px 10px; font-size:12.5px; white-space:nowrap;}
+.export-item:hover{background:var(--m-bg);}
+.export-item.danger:hover{color:var(--m-danger); background:var(--m-accent-soft);}
+.export-item.filebtn{position:relative; overflow:hidden;}
+.export-item.filebtn input[type=file]{position:absolute; inset:0; opacity:0; cursor:pointer;}
+.export-menu-sep{height:1px; background:var(--m-border); margin:4px 2px;}
+
+/* ---------- small centered dialog for cloud identity capture (name/unit/role) ----------
+   Deliberately a separate, smaller overlay from the full-screen 教學與範例 modal —
+   this one is a quick one-time gate, not a browsing surface. */
+.tiny-modal-overlay{position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:600; display:none; align-items:center; justify-content:center;}
+.tiny-modal-overlay.open{display:flex;}
+.tiny-modal-card{background:var(--m-surface); border-radius:14px; width:min(360px,90vw); padding:22px 22px 18px; box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.tiny-modal-card h3{margin:0 0 4px; font-size:15px; color:var(--m-ink);}
+.tiny-modal-card p.tiny-modal-desc{margin:0 0 14px; font-size:11.5px; color:var(--m-muted); line-height:1.5;}
+.tiny-modal-card label{display:block; font-size:11px; color:var(--m-muted); margin:10px 0 4px;}
+.tiny-modal-card input{width:100%; box-sizing:border-box; border:1px solid var(--m-border); border-radius:7px; padding:7px 9px; font-size:12.5px; background:#fff; color:var(--m-ink);}
+.tiny-modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:18px;}
+.tiny-modal-actions button{border:none; border-radius:7px; padding:7px 14px; font-size:12px; cursor:pointer;}
+.tiny-modal-actions .tm-primary{background:var(--m-accent); color:var(--m-accent-ink);}
+.tiny-modal-actions .tm-secondary{background:transparent; color:var(--m-muted);}
+
+.legend-bar{display:flex; gap:16px; align-items:center; padding:6px 18px; font-size:11px; color:var(--m-muted); background:var(--m-surface); border-bottom:1px solid var(--m-border); flex-wrap:wrap;}
+.legend-bar span{display:inline-flex; align-items:center; gap:5px;}
+.leg-box{width:13px; height:13px; border-radius:3px; display:inline-block;}
+.leg-dia{width:11px; height:11px; display:inline-block; clip-path:polygon(50% 2%, 98% 50%, 50% 98%, 2% 50%);}
+.leg-line{width:16px; height:0; border-top:2px solid var(--m-muted); display:inline-block;}
+.leg-line.dashed{border-top-style:dashed; border-color:var(--red);}
+
+/* ---------- main layout: left org/file side panel + scrollable canvas ---------- */
+.main-layout{display:flex; height:calc(100vh - 84px);}
+.side-panel{flex:0 0 236px; width:236px; overflow-y:auto; background:var(--sp-bg); border-right:1.5px solid var(--sp-bg-dark); padding:14px 12px 24px;}
+.sp-section{margin-bottom:18px;}
+.sp-section-title{font-size:11px; font-weight:800; color:rgba(255,255,255,.7); text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid rgba(255,255,255,.2);}
+.sp-btn{display:block; width:100%; text-align:left; border:1px solid var(--m-border); background:var(--m-surface); color:var(--m-ink); border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:6px; transition:.15s;}
+.sp-btn:hover{border-color:var(--m-accent); color:var(--m-accent-ink); background:var(--m-accent-soft);}
+
+/* "全部 Flow" view toggle sits above the unit/role tree — clears any active
+   per-task filter. Task chips further down (buildTaskChip) act as the other
+   half of the filter: click one to isolate that task's row, click again (or
+   hit 全部 Flow) to go back to seeing everything. */
+.org-view-all{display:block; width:100%; text-align:left; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.08); color:#fff;
+  border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:10px; font-weight:600;}
+.org-view-all:hover{background:rgba(255,255,255,.18);}
+.org-view-all.active{background:#fff; color:var(--sp-bg-dark); border-color:#fff;}
+
+.org-tree{margin-bottom:4px;}
+.org-row{display:flex; align-items:center; gap:4px; padding:4px 2px;}
+.org-toggle{border:none; background:transparent; color:rgba(255,255,255,.7); font-size:10px; width:14px; flex:0 0 14px; padding:0;}
+.org-name{flex:1 1 auto; font-size:12px; font-weight:700; color:#fff; word-break:break-word;}
+.org-role-head .org-name{font-weight:600; font-size:11.5px;}
+.org-del{border:none; background:transparent; color:rgba(255,255,255,.6); font-size:10px; opacity:.5; padding:2px 4px;}
+.org-row:hover .org-del{opacity:1;}
+.org-del:hover{color:#ffb9a8;}
+.org-roles{padding-left:14px; border-left:1px dashed rgba(255,255,255,.3); margin-left:6px;}
+.org-tasks{padding-left:14px; margin-bottom:6px;}
+.org-task-chip{font-size:11px; color:var(--m-ink); background:var(--m-surface); border:1px solid var(--m-border); border-radius:5px; padding:3px 7px; margin:3px 0; cursor:pointer;}
+.org-task-chip:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
+.org-task-chip.active{background:var(--m-accent); border-color:var(--m-accent); color:#fff; font-weight:700;}
+.org-add-btn{display:block; border:1px dashed rgba(255,255,255,.35); background:transparent; color:rgba(255,255,255,.75); font-size:10.5px; border-radius:6px; padding:4px 8px; margin-top:2px; width:100%; text-align:left;}
+.org-add-btn:hover{border-color:#fff; color:#fff; background:rgba(255,255,255,.12);}
+.org-unassigned .org-name{color:rgba(255,255,255,.85); font-style:italic;}
+
+/* small "篩選中：X ✕" pill that shows in the legend bar whenever a task
+   filter is active, so it's obvious why other tasks disappeared even if the
+   side panel is scrolled out of view. */
+.legend-bar .filter-status{display:none; align-items:center; gap:6px; margin-left:auto; background:var(--m-accent); color:#fff; border-radius:6px; padding:3px 6px 3px 10px; font-weight:700;}
+.legend-bar .filter-status.show{display:inline-flex;}
+.filter-clear-btn{border:none; background:rgba(255,255,255,.25); color:#fff; border-radius:50%; width:16px; height:16px; font-size:10px; line-height:16px; padding:0;}
+.filter-clear-btn:hover{background:rgba(255,255,255,.45);}
+.task-tag{font-size:9.5px; color:#fff; background:rgba(255,255,255,.2); border-radius:4px; padding:1px 5px; display:inline-block; align-self:flex-start;}
+
+/* ---------- 教學與範例 modal ----------
+   The 範例 (examples) tab renders through a completely separate, read-only
+   pipeline (own node index, own canvas, zero event listeners) rather than a
+   "locked" flag bolted onto the real interactive renderer — see the
+   EXAMPLES/renderExample() section in the script. It never touches MODEL,
+   so 清空畫布 / 匯出 / 合併匯入 JSON can never affect or be affected by it. */
+/* full window takeover rather than a small centered popup — Jerry found a
+   floating dialog too cramped for browsing an actual flow diagram. */
+.modal-overlay{position:fixed; inset:0; background:var(--surface); z-index:500; display:none;}
+.modal-overlay.open{display:flex;}
+.modal-panel{background:var(--surface); width:100vw; height:100vh; border-radius:0; overflow:hidden;
+  display:flex; flex-direction:column;}
+.modal-header{display:flex; align-items:center; justify-content:space-between; background:var(--tb-bg); padding:0 8px 0 18px; flex:0 0 auto;}
+.modal-tabs{display:flex; gap:4px;}
+.modal-tab{border:none; background:transparent; color:rgba(255,255,255,.75); font-size:13px; font-weight:700; padding:14px 16px; border-bottom:3px solid transparent;}
+.modal-tab:hover{color:#fff;}
+.modal-tab.active{color:#fff; border-bottom-color:#fff;}
+.modal-close{border:none; background:transparent; color:#fff; font-size:16px; width:36px; height:36px; border-radius:8px;}
+.modal-close:hover{background:rgba(255,255,255,.18);}
+.modal-body{flex:1 1 auto; overflow:hidden; position:relative;}
+.modal-tab-content{position:absolute; inset:0; overflow:auto; display:none;}
+.modal-tab-content.active{display:block;}
+
+/* -- 教學 tab: numbered, illustrated step cards -- */
+.tut-wrap{padding:26px 34px; max-width:860px; margin:0 auto;}
+.tut-notice{font-size:12px; color:var(--m-accent-ink); background:var(--m-accent-soft); border:1px solid var(--m-accent); border-radius:8px; padding:10px 14px; margin-bottom:16px; line-height:1.6;}
+.tut-intro{font-size:13px; color:var(--muted); margin-bottom:22px; line-height:1.6;}
+.tut-step{display:flex; gap:16px; padding:18px 0; border-bottom:1px solid var(--border-soft);}
+.tut-step:last-child{border-bottom:none;}
+.tut-num{flex:0 0 30px; height:30px; border-radius:50%; background:var(--m-accent); color:#fff; font-weight:800; font-size:13px;
+  display:flex; align-items:center; justify-content:center;}
+.tut-body{flex:1 1 auto;}
+.tut-title{font-weight:800; font-size:13.5px; margin-bottom:4px;}
+.tut-desc{font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:10px;}
+.tut-fig{background:var(--bg); border:1px solid var(--border-soft); border-radius:10px; padding:12px; display:inline-block;}
+
+/* -- 範例 tab: mirrors the real .main-layout / .side-panel look -- */
+.example-layout{display:flex; height:100%;}
+.example-side{flex:0 0 220px; background:var(--sp-bg); padding:14px 12px; overflow-y:auto;}
+.example-pick{display:block; width:100%; text-align:left; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.08);
+  color:#fff; border-radius:7px; padding:7px 10px; font-size:12px; margin-bottom:6px; font-weight:600;}
+.example-pick:hover{background:rgba(255,255,255,.18);}
+.example-pick.active{background:#fff; color:var(--sp-bg-dark); border-color:#fff;}
+.example-readonly-note{font-size:10px; color:rgba(255,255,255,.65); margin:12px 0 4px; line-height:1.5;}
+.example-canvas-scroll{flex:1 1 auto; overflow:auto; background:var(--bg);}
+.example-canvas{position:relative; width:max-content;}
+.node.example-node{pointer-events:none;}
+.node.example-node .node-top-actions, .node.example-node .node-dot{display:none;}
+
+/* ---------- canvas: swimlane grid — one sticky header row of the 6 fixed
+   stages, then one full-width row per task. Every task shares the same
+   stage columns, so the 6 hats only ever get drawn once. ---------- */
+.canvas-scroll{overflow:auto; flex:1 1 auto; height:100%; background:var(--bg);}
+.canvas{position:relative; width:max-content; transform-origin: top left;}
+
+.edge-svg{position:absolute; top:0; left:0; pointer-events:none; overflow:visible; z-index:5;}
+.edge-deco-layer{position:absolute; top:0; left:0; pointer-events:none; z-index:6;}
+
+.stage-header-row{position:sticky; top:0; z-index:30; display:flex; background:var(--surface); border-bottom:1.5px solid var(--border); box-shadow:0 1px 4px rgba(0,0,0,.05);}
+.row-label-spacer{flex:0 0 var(--label-w); width:var(--label-w); border-right:1.5px solid var(--tl-bg-dark); background:var(--tl-bg);
+  display:flex; align-items:center; justify-content:center; padding:6px;}
+.task-add-btn-header{border:1.5px dashed rgba(255,255,255,.4); background:transparent; color:#fff; border-radius:8px; padding:6px 8px; font-size:11px; width:100%;}
+.task-add-btn-header:hover{border-color:#fff; color:#fff; background:rgba(255,255,255,.15);}
+.stage-header-cell{flex:0 0 var(--stage-w); width:var(--stage-w); padding:9px 16px; box-sizing:border-box; border-right:1px solid rgba(0,0,0,.05);}
+.stage-header-cell:last-child{border-right:none;}
+.stage-head-title-row{border-bottom:2px solid var(--stage-color,var(--accent)); padding-bottom:6px; margin-bottom:3px;}
+.stage-num{display:inline-flex; width:19px; height:19px; border-radius:50%; background:var(--stage-color,var(--accent)); color:#fff;
+  font-size:10px; font-weight:800; align-items:center; justify-content:center; margin-right:6px; vertical-align:middle;}
+.stage-title{font-size:13.5px; font-weight:800; vertical-align:middle;}
+.stage-purpose{font-size:11px; color:var(--muted); margin-top:3px; outline:none; padding:2px 3px; border-radius:4px; min-height:14px;}
+.stage-purpose:focus{background:var(--bg); box-shadow:0 0 0 1px var(--accent);}
+.stage-purpose:empty:before{content:'（點此輸入這個階段的說明）'; color:var(--muted-soft);}
+
+.task-row-outer{border-bottom:1px solid rgba(0,0,0,.06);}
+.task-row{display:flex;}
+.task-label{position:sticky; left:0; z-index:20; flex:0 0 var(--label-w); width:var(--label-w); background:var(--tl-bg);
+  border-right:1.5px solid var(--tl-bg-dark); padding:10px 10px; display:flex; flex-direction:column; gap:6px; justify-content:center;}
+.task-name{font-weight:700; font-size:12.5px; outline:none; padding:2px 3px; border-radius:4px; word-break:break-word; line-height:1.35; color:#fff;}
+.task-name[contenteditable="true"]{background:rgba(255,255,255,.18); box-shadow:0 0 0 1px #fff;}
+.task-row-actions{display:flex; gap:2px; align-items:center;}
+.task-mini-btn{border:none; background:transparent; color:rgba(255,255,255,.75); font-size:11px; padding:2px 4px; border-radius:4px;}
+.task-mini-btn:hover{background:rgba(255,255,255,.18); color:#fff;}
+.task-mini-btn.del:hover{color:#ffb9a8; background:rgba(255,255,255,.18);}
+.task-empty-hint{display:flex; gap:4px; margin-top:2px;}
+.task-empty-hint button{border:1px solid rgba(255,255,255,.4); background:rgba(255,255,255,.08); border-radius:6px; padding:3px 6px; font-size:10.5px; color:#fff;}
+.task-empty-hint button:hover{border-color:#fff; background:rgba(255,255,255,.18);}
+
+.task-canvas-wrap{position:relative; flex:1 1 auto;}
+.task-bg-bands{position:absolute; inset:0; display:flex; pointer-events:none; z-index:0;}
+.task-bg-band{flex:0 0 var(--stage-w); width:var(--stage-w); border-right:1px solid rgba(0,0,0,.035);}
+.task-track{position:relative; min-height:150px; z-index:1;}
+.task-row-outer.collapsed .task-canvas-wrap{display:none;}
+.task-row-outer.collapsed .task-meta-panel{display:none;}
+
+.task-meta-panel{display:none; flex-wrap:wrap; gap:0; padding:10px calc(var(--label-w) + 4px) 12px 10px; background:var(--bg); border-top:1px dashed rgba(0,0,0,.1);}
+.task-meta-panel.open{display:flex;}
+.task-meta-col{flex:0 0 260px; width:260px; box-sizing:border-box; padding:0 8px; margin-bottom:8px;}
+.task-meta-col h6{font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted-soft); margin:0 0 4px; border-bottom:1px solid var(--border-soft); padding-bottom:3px;}
+.task-meta-col label{font-size:9.5px; color:var(--muted-soft); display:block; margin:5px 0 2px;}
+.task-meta-col textarea{width:100%; border:1px solid var(--border-soft); border-radius:5px; padding:4px 6px; font-size:10.5px; min-height:32px; resize:vertical; background:#fff;}
+
+/* ---------- nodes ---------- */
+.node{position:absolute; user-select:none;}
+.node.step{width:162px; min-height:56px;}
+.node.step .node-body{position:relative; background:var(--rect-bg); border:1.5px solid var(--rect-border); border-radius:9px;
+  padding:7px 10px; min-height:56px; display:flex; flex-direction:column; justify-content:center; gap:2px; box-shadow:var(--shadow);}
+.node.decision{width:152px; min-height:120px;}
+.node.decision .diamond-bg{position:absolute; inset:0; background:var(--dia-bg); border:1.5px solid var(--dia-border);
+  clip-path:polygon(50% 2%, 98% 50%, 50% 98%, 2% 50%);}
+.node.decision .node-body{position:relative; min-height:120px; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:2px; padding:30px 34px; text-align:center;}
+.node-title{outline:none; font-size:11.5px; font-weight:700; line-height:1.3; text-align:center; word-break:break-word;}
+.node-title:empty:before{content:attr(data-placeholder); color:var(--muted-soft); font-weight:400;}
+.node-owner{outline:none; font-size:9.5px; font-weight:600; color:var(--accent-ink,var(--accent)); line-height:1.3; text-align:center; word-break:break-word; margin-top:1px;}
+.node-owner:empty:before{content:'當下角色…'; color:var(--muted-soft); font-weight:400;}
+.node-desc{outline:none; font-size:10px; color:var(--muted); line-height:1.3; text-align:center; word-break:break-word; margin-top:1px;}
+.node-desc:empty:before{content:'描述（選填）…'; color:var(--muted-soft);}
+
+.node.dragging{opacity:.85; z-index:20;}
+.node.connecting{z-index:20;}
+.node.connect-target .node-body,
+.node.connect-target .diamond-bg{outline:2.5px solid var(--accent); outline-offset:2px;}
+
+/* ---------- single top icon cluster: add step / add decision / delete ----------
+   Only one location (above the node) instead of icons on all four sides —
+   less visual noise. New nodes always spawn to the right (boxes are
+   draggable anyway, so the exact spot doesn't matter) and are NOT
+   auto-connected — creating and connecting are separate actions now. */
+.node-top-actions{position:absolute; top:-42px; left:50%; width:130px; height:42px; transform:translateX(-50%);
+  display:flex; justify-content:center; align-items:flex-start; gap:5px; opacity:0; transition:opacity .1s; z-index:8; pointer-events:auto;}
+.node:hover .node-top-actions, .node-top-actions:hover{opacity:1;}
+.top-action-btn{position:relative; width:24px; height:24px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:11px; padding:0;
+  line-height:22px; box-shadow:var(--shadow); color:var(--rect-border);}
+.top-action-btn.dec{color:var(--dia-border);}
+.top-action-btn.del{color:var(--red);}
+.top-action-btn:hover{background:var(--accent); color:#fff; border-color:var(--accent);}
+.top-action-btn.del:hover{background:var(--red); border-color:var(--red);}
+.top-action-btn::after{
+  content:attr(data-tip); position:absolute; bottom:125%; left:50%; transform:translateX(-50%);
+  background:#26282f; color:#fff; font-size:9.5px; padding:3px 7px; border-radius:5px; white-space:nowrap;
+  opacity:0; pointer-events:none; transition:opacity .08s; z-index:20;}
+.top-action-btn:hover::after{opacity:1;}
+
+/* ---------- connector dots: dedicated line-drawing handles on all 4 sides ---------- */
+.node-dot{position:absolute; width:12px; height:12px; border-radius:50%; background:var(--accent); border:2px solid #fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.1); opacity:0; transition:opacity .1s, transform .1s; cursor:crosshair; z-index:7;}
+.node:hover .node-dot{opacity:1;}
+.node-dot:hover{transform:scale(1.35);}
+.node-dot.dot-top{top:-6px; left:50%; transform:translateX(-50%);}
+.node-dot.dot-top:hover{transform:translateX(-50%) scale(1.35);}
+.node-dot.dot-bottom{bottom:-6px; left:50%; transform:translateX(-50%);}
+.node-dot.dot-bottom:hover{transform:translateX(-50%) scale(1.35);}
+.node-dot.dot-left{left:-6px; top:50%; transform:translateY(-50%);}
+.node-dot.dot-left:hover{transform:translateY(-50%) scale(1.35);}
+.node-dot.dot-right{right:-6px; top:50%; transform:translateY(-50%);}
+.node-dot.dot-right:hover{transform:translateY(-50%) scale(1.35);}
+
+/* ---------- edge decorations ----------
+   Meaningful (non-empty) labels stay visible so real info (Yes/No, rollback
+   reason) isn't hidden; the edit/toggle/delete icon buttons and the empty
+   "＋標籤" placeholder only appear once you hover the line. ---------- */
+.edge-deco{position:absolute; pointer-events:none; display:flex; align-items:center; gap:3px; transform:translate(-50%,-50%); z-index:6;}
+.edge-label{background:#fff; border:1px solid var(--border); border-radius:6px; padding:2px 6px; font-size:10.5px; color:var(--ink); white-space:nowrap;
+  box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .1s;}
+.edge-label.filled{opacity:1; pointer-events:auto;}
+.edge-deco.show .edge-label{opacity:1; pointer-events:auto;}
+.edge-label:empty:before{content:'＋標籤'; color:var(--muted-soft);}
+.edge-label.dashed-label{border-color:var(--red-soft); color:var(--red);}
+.edge-btn{width:16px; height:16px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:9px; padding:0; line-height:14px; box-shadow:var(--shadow);
+  opacity:0; pointer-events:none; transition:opacity .1s;}
+.edge-deco.show .edge-btn{opacity:1; pointer-events:auto;}
+.edge-btn.del:hover{color:var(--red); border-color:var(--red-soft); background:var(--red-soft);}
+.edge-btn.toggle.active{background:var(--red-soft); color:var(--red); border-color:#f2c9c4;}
+
+/* handles shown only on the currently-SELECTED edge: two small circles at its
+   actual endpoints (drag onto a different node to reconnect that end), and
+   a small pill on its bend corridor (drag along the corridor's axis to
+   nudge it away from an overlapping neighbour). */
+.edge-endpoint-handle{position:absolute; width:14px; height:14px; border-radius:50%; background:#fff;
+  border:2.5px solid var(--accent); transform:translate(-50%,-50%); cursor:crosshair; pointer-events:auto; z-index:7;
+  box-shadow:0 0 0 3px rgba(94,106,210,.22);}
+.edge-endpoint-handle:hover{background:var(--accent);}
+.edge-bend-handle{position:absolute; width:22px; height:22px; border-radius:7px; background:var(--accent);
+  color:#fff; font-size:13px; font-weight:700; line-height:22px; text-align:center;
+  border:2px solid #fff; transform:translate(-50%,-50%); pointer-events:auto; z-index:9;
+  box-shadow:0 1px 4px rgba(16,24,40,.35);}
+.edge-bend-handle:hover{background:var(--accent-ink);}
+.edge-bend-handle.axis-y{cursor:ns-resize;}
+.edge-bend-handle.axis-x{cursor:ew-resize;}
+
+@media print{ .toolbar,.legend-bar{display:none;} }
+
+
+/* ---------- 主管彙整檢視專用的少量額外樣式 ---------- */
+.mv-submitter-tag{font-size:9px; color:var(--m-muted); margin-top:2px;}
+.mv-note{color:var(--m-muted);}
+.stage-editor-row{display:flex; align-items:center; gap:6px; margin-bottom:6px;}
+.stage-editor-row input[type=text]{flex:1;}
+.stage-editor-row input[type=color]{width:32px; height:28px; border:1px solid var(--m-border); border-radius:5px; padding:0; flex:0 0 32px;}
+.stage-editor-row button{border:none; background:var(--m-bg); color:var(--m-ink); border-radius:5px; width:24px; height:24px; font-size:11px; flex:0 0 24px;}
+.stage-editor-row button:hover{background:var(--m-accent-soft);}
+.stage-editor-row button:disabled{opacity:.35; cursor:default;}
+.stage-editor-add-btn{display:block; width:100%; text-align:center; border:1px dashed var(--m-border); background:transparent; color:var(--m-muted); border-radius:7px; padding:8px; font-size:12px; margin-top:4px;}
+.stage-editor-add-btn:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
+</style>
+</head>
+<body>
+
+<div class="tiny-modal-overlay open" id="pinGateOverlay">
+  <div class="tiny-modal-card">
+    <h3>主管彙整檢視</h3>
+    <p class="tiny-modal-desc">輸入單位名稱與該單位的PIN碼，即可看到目前該單位所有人「雲端存檔」過的內容彙整結果（唯讀，看不到即時編輯中的畫面，只看得到大家各自最後一次存檔時的樣子）。</p>
+    <label>單位名稱</label>
+    <input type="text" id="pinUnitInput" placeholder="例如：DIV4" />
+    <label>PIN 碼</label>
+    <input type="password" id="pinCodeInput" placeholder="向管理者索取" />
+    <div class="tiny-modal-actions">
+      <button class="tm-primary" id="pinConfirmBtn">查看彙整</button>
+    </div>
+    <p class="tiny-modal-desc mv-note" id="pinErrorMsg" style="color:var(--m-danger); display:none;"></p>
+  </div>
+</div>
+
+<div class="toolbar" id="mvToolbar" style="display:none;">
+  <div class="brand"><span class="dot"></span> Flow 繪製工具 — 主管彙整檢視</div>
+  <div class="tb-right">
+    <span id="mvSummary" style="color:rgba(255,255,255,.85); font-size:12px;"></span>
+    <button class="tbtn" id="stageEditorOpenBtn" title="設定這個單位底下大家共用的帽子（步驟階段）">⚙ 帽子設定</button>
+    <button class="tbtn" id="mvRefreshBtn">重新整理</button>
+    <button class="tbtn" id="mvSwitchUnitBtn">切換單位</button>
+  </div>
+</div>
+
+<!-- 帽子設定 —— 用剛剛通過驗證的同一組單位PIN當門檻（不用另外再記一個admin
+     PIN），因為「管這個單位的帽子」跟「看這個單位的彙整」本來就是同一群人。 -->
+<div class="tiny-modal-overlay" id="stageEditorOverlay">
+  <div class="tiny-modal-card" style="width:min(520px,92vw);">
+    <h3>帽子設定 — <span id="stageEditorUnitLabel"></span></h3>
+    <p class="tiny-modal-desc">這裡設定的帽子（步驟階段）會套用到這個單位底下所有角色/員工存檔時使用的畫布結構，跟其他單位互不影響。改標題/顏色不會動到既有資料；刪除整個帽子後，已經歸在那個帽子下的舊資料仍會顯示（標成「已移除的帽子」），只是沒辦法再往裡面加新內容。</p>
+    <div id="stageEditorList"></div>
+    <button class="stage-editor-add-btn" id="stageEditorAddBtn">＋ 新增帽子</button>
+    <div class="tiny-modal-actions">
+      <button class="tm-secondary" id="stageEditorCancelBtn">取消</button>
+      <button class="tm-primary" id="stageEditorSaveBtn">儲存帽子設定</button>
+    </div>
+  </div>
+</div>
+<div class="legend-bar" id="mvLegend" style="display:none;">
+  <span><span class="leg-box" style="background:var(--rect-bg); border:1.5px solid var(--rect-border);"></span> 方形＝步驟（含名稱／當下角色／描述）</span>
+  <span><span class="leg-dia" style="background:var(--dia-bg); border:1.5px solid var(--dia-border);"></span> 菱形＝判斷</span>
+  <span><span class="leg-line"></span> 實線＝正常流程</span>
+  <span><span class="leg-line dashed"></span> 退回 / Rollback 連線</span>
+  <span class="mv-note" style="margin-left:auto;">唯讀彙整畫面，內容為各人最後一次雲端存檔時的版本，不是即時同步。</span>
+</div>
+<div class="main-layout" id="mvMainLayout" style="display:none;">
+  <div class="canvas-scroll" id="canvasScroll">
+    <div class="canvas" id="canvas">
+      <svg id="edgeSvg" style="position:absolute; top:0; left:0; overflow:visible;"></svg>
+      <div id="edgeDeco" style="position:absolute; top:0; left:0; pointer-events:none;"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   雲端連線設定 —— 跟 flow-builder.html 同一組 Supabase 專案的 URL/anon key。
+   ========================================================================= */
+const SUPABASE_URL = 'https://tksolsqxthxlfdoocqtg.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_BHFnVC2x70HOwgJgw6MULg_DyT6ACJq';
+const supabaseClient = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+/* =========================================================================
+   以下常數與純函式，跟 flow-builder.html 逐字相同（同一套資料模型／繪圖幾何
+   邏輯），故意複製過來而不是用 <script src> 共用檔案 —— 因為這整個工具的
+   設計就是「單檔案、開啟即用、不需要架設備」，manager-view.html 也維持同樣
+   的原則，是完全獨立、可以單獨部署的一個檔案。如果之後兩邊的繪圖邏輯又各自
+   修正了 bug，記得同步過來，否則兩邊的繞線結果會慢慢不一致。
+   ========================================================================= */
+/* 帽子是綁在單位上的（不同BU工作流程不同），DEFAULT_STAGE_DEFS 是還沒有
+   任何單位自訂過帽子時的內建預設值。STAGE_DEFS 是「目前畫面上實際在用」的
+   版本 —— loadUnit() 每次切換單位都會先把它重設回 DEFAULT_STAGE_DEFS，再
+   視該單位是否自訂過帽子決定要不要換掉，避免「切到沒設定過帽子的B單位，
+   畫面卻還殘留A單位剛剛自訂的帽子」這種跨單位污染。 */
+const DEFAULT_STAGE_DEFS = [
+  { id:'request_collection',  title:'Request Collection',   color:'#e57373' },
+  { id:'research_evaluation', title:'Research / Evaluation', color:'#f2a54a' },
+  { id:'execution',           title:'Execution',             color:'#e0c23c' },
+  { id:'review',               title:'Review',                color:'#5cb85c' },
+  { id:'delivery',              title:'Delivery',              color:'#4aa3d1' },
+  { id:'go_live',               title:'Go Live',               color:'#7a7ad1' },
+];
+let STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s}));
+const STAGE_WIDTH = 620, LABEL_WIDTH = 150;
+const RECT_W = 162, RECT_H = 56, DIA_W = 152, DIA_H = 120;
+let uidCounter = 1;
+function uid(prefix){ return prefix + (uidCounter++); }
+/* 跟 flow-builder.html 同樣的安全網：目前設定的帽子 + 任何舊資料裡還在用、
+   但目前設定已經沒有的 stageId（例如提交者當時的帽子跟主管後來改掉的不一
+   樣）。只用在「決定畫面上要出現哪些欄」的地方，不影響其他邏輯。 */
+function effectiveStageDefs(){
+  const known = new Set(STAGE_DEFS.map(s=>s.id));
+  const orphanIds = [];
+  MODEL.tasks.forEach(t=> t.nodes.forEach(n=>{
+    if(n.stageId && !known.has(n.stageId) && !orphanIds.includes(n.stageId)) orphanIds.push(n.stageId);
+  }));
+  if(!orphanIds.length) return STAGE_DEFS;
+  return STAGE_DEFS.concat(orphanIds.map(id=>({ id, title:'（已移除的帽子）', color:'#9aa0a6' })));
+}
+function normalizeOrgName(s){ return (s||'').trim().toUpperCase(); }
+function tint(hex, alpha){
+  const c = hex.replace('#','');
+  const r = parseInt(c.substring(0,2),16), g = parseInt(c.substring(2,4),16), b = parseInt(c.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function blankModel(){
+  const stagePurpose = {};
+  STAGE_DEFS.forEach(s => stagePurpose[s.id] = '');
+  return { name:'未命名 Flow', stagePurpose, units:[], tasks:[], edges:[] };
+}
+function ensureNodeStage(n){
+  if(n.stageId) return;
+  const idx = Math.min(STAGE_DEFS.length-1, Math.max(0, Math.floor((n.x||0) / STAGE_WIDTH)));
+  n.stageId = STAGE_DEFS[idx].id;
+  n.x = (n.x||0) - idx*STAGE_WIDTH;
+}
+
+/* ---------- geometry (verbatim from flow-builder.html's buildOrthogonalPath
+   and its dependencies) ---------- */
+function sideNormal(side){
+  return side==='right' ? {x:1,y:0} : side==='left' ? {x:-1,y:0} : side==='top' ? {x:0,y:-1} : {x:0,y:1};
+}
+function sideIsHorizontal(side){ return side==='left' || side==='right'; }
+function backtracks(n, isHorizontalAxis, delta){
+  const dir = isHorizontalAxis ? n.x : n.y;
+  return dir !== 0 && delta !== 0 && Math.sign(delta) !== Math.sign(dir);
+}
+function segClipsRect(ax, ay, bx, by, rect){
+  if(!rect) return false;
+  if(ay === by){
+    const lo = Math.min(ax,bx), hi = Math.max(ax,bx);
+    return ay > rect.top && ay < rect.bottom && hi > rect.left && lo < rect.right;
+  }
+  const lo = Math.min(ay,by), hi = Math.max(ay,by);
+  return ax > rect.left && ax < rect.right && hi > rect.top && lo < rect.bottom;
+}
+function buildOrthogonalPath(p1, fromSide, p2, toSide, rFrom, rTo, bendOffset){
+  bendOffset = bendOffset || 0;
+  const STUB = 26, CLEAR = 32;
+  const n1 = sideNormal(fromSide), n2 = sideNormal(toSide);
+  const e1 = { x:p1.x+n1.x*STUB, y:p1.y+n1.y*STUB };
+  const e2 = { x:p2.x+n2.x*STUB, y:p2.y+n2.y*STUB };
+  const h1 = sideIsHorizontal(fromSide), h2 = sideIsHorizontal(toSide);
+  const back1 = backtracks(n1, h1, h1 ? e2.x-e1.x : e2.y-e1.y);
+  const back2 = backtracks(n2, h2, h2 ? e1.x-e2.x : e1.y-e2.y);
+
+  let mids, corridor = null;
+  if(back1 || back2 || bendOffset !== 0){
+    if(h1){
+      const bottomClear = Math.max(rFrom?rFrom.bottom:e1.y, rTo?rTo.bottom:e2.y) + CLEAR;
+      const topClear = Math.min(rFrom?rFrom.top:e1.y, rTo?rTo.top:e2.y) - CLEAR;
+      let preferBottom;
+      if(!h2 && n2.y !== 0) preferBottom = n2.y > 0;
+      else preferBottom = (Math.abs(bottomClear-e1.y)+Math.abs(bottomClear-e2.y)) <= (Math.abs(e1.y-topClear)+Math.abs(e2.y-topClear));
+      const corridorY = (preferBottom ? bottomClear : topClear) + bendOffset;
+      const clearLeft = Math.min(rFrom?rFrom.left:e1.x, rTo?rTo.left:e2.x) - CLEAR;
+      const clearRight = Math.max(rFrom?rFrom.right:e1.x, rTo?rTo.right:e2.x) + CLEAR;
+      let x1 = e1.x, x2 = e2.x;
+      if(segClipsRect(x1, e1.y, x1, corridorY, rTo)) x1 = (Math.abs(x1-clearLeft) <= Math.abs(x1-clearRight)) ? clearLeft : clearRight;
+      if(segClipsRect(x2, e2.y, x2, corridorY, rFrom)) x2 = (Math.abs(x2-clearLeft) <= Math.abs(x2-clearRight)) ? clearLeft : clearRight;
+      mids = [];
+      if(x1 !== e1.x) mids.push({x:x1, y:e1.y});
+      mids.push({x:x1, y:corridorY});
+      if(x2 !== x1) mids.push({x:x2, y:corridorY});
+      if(x2 !== e2.x) mids.push({x:x2, y:e2.y});
+      corridor = { axis:'y', value:corridorY, x1:e1.x, x2:e2.x };
+    } else {
+      const rightClear = Math.max(rFrom?rFrom.right:e1.x, rTo?rTo.right:e2.x) + CLEAR;
+      const leftClear = Math.min(rFrom?rFrom.left:e1.x, rTo?rTo.left:e2.x) - CLEAR;
+      let preferRight;
+      if(h2 && n2.x !== 0) preferRight = n2.x > 0;
+      else preferRight = (Math.abs(rightClear-e1.x)+Math.abs(rightClear-e2.x)) <= (Math.abs(e1.x-leftClear)+Math.abs(e2.x-leftClear));
+      const corridorX = (preferRight ? rightClear : leftClear) + bendOffset;
+      const clearAbove = Math.min(rFrom?rFrom.top:e1.y, rTo?rTo.top:e2.y) - CLEAR;
+      const clearBelow = Math.max(rFrom?rFrom.bottom:e1.y, rTo?rTo.bottom:e2.y) + CLEAR;
+      let y1 = e1.y, y2 = e2.y;
+      if(segClipsRect(e1.x, y1, corridorX, y1, rTo)) y1 = (Math.abs(y1-clearAbove) <= Math.abs(y1-clearBelow)) ? clearAbove : clearBelow;
+      if(segClipsRect(e2.x, y2, corridorX, y2, rFrom)) y2 = (Math.abs(y2-clearAbove) <= Math.abs(y2-clearBelow)) ? clearAbove : clearBelow;
+      mids = [];
+      if(y1 !== e1.y) mids.push({x:e1.x, y:y1});
+      mids.push({x:corridorX, y:y1});
+      if(y2 !== y1) mids.push({x:corridorX, y:y2});
+      if(y2 !== e2.y) mids.push({x:e2.x, y:y2});
+      corridor = { axis:'x', value:corridorX, y1:e1.y, y2:e2.y };
+    }
+  } else if(h1 === h2){
+    mids = [];
+  } else {
+    mids = h1 ? [{x:e2.x, y:e1.y}] : [{x:e1.x, y:e2.y}];
+  }
+  const pts = [p1, e1, ...mids, e2, p2];
+  return { d: roundedPathFromPoints(pts, 14), pts, corridor };
+}
+function roundedPathFromPoints(pts, radius){
+  if(pts.length <= 2) return 'M' + pts.map(p=>`${p.x},${p.y}`).join(' L ');
+  let d = `M${pts[0].x},${pts[0].y}`;
+  for(let i=1;i<pts.length-1;i++){
+    const prev = pts[i-1], curr = pts[i], next = pts[i+1];
+    const inLen = Math.hypot(curr.x-prev.x, curr.y-prev.y);
+    const outLen = Math.hypot(next.x-curr.x, next.y-curr.y);
+    const r = Math.min(radius, inLen/2, outLen/2);
+    if(r < 0.5){ d += ` L${curr.x},${curr.y}`; continue; }
+    const inX = curr.x - (curr.x-prev.x)/inLen*r, inY = curr.y - (curr.y-prev.y)/inLen*r;
+    const outX = curr.x + (next.x-curr.x)/outLen*r, outY = curr.y + (next.y-curr.y)/outLen*r;
+    d += ` L${inX},${inY} Q${curr.x},${curr.y} ${outX},${outY}`;
+  }
+  d += ` L${pts[pts.length-1].x},${pts[pts.length-1].y}`;
+  return d;
+}
+function pathMidpoint(pts){
+  const segs = [];
+  let total = 0;
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i], b=pts[i+1], len=Math.hypot(b.x-a.x, b.y-a.y);
+    segs.push({a,b,len}); total += len;
+  }
+  let target = total/2, acc = 0;
+  for(const s of segs){
+    if(acc+s.len >= target){
+      const t = s.len ? (target-acc)/s.len : 0;
+      return { x:s.a.x+(s.b.x-s.a.x)*t, y:s.a.y+(s.b.y-s.a.y)*t };
+    }
+    acc += s.len;
+  }
+  return pts[pts.length-1];
+}
+
+/* =========================================================================
+   合併多份雲端存檔 —— 跟 flow-builder.html 的 mergeImportModel() 邏輯一致
+   （id 全部透過本頁自己的 uid() 重新分配、單位/角色以 normalizeOrgName() 後
+   的名稱比對合併、stagePurpose 只補空白處），差異只有一點：這裡額外在每個
+   任務上記錄 submitterName，因為主管彙整畫面需要知道「這是誰填的」，一般
+   單機使用的合併匯入則不需要這個資訊。
+   ========================================================================= */
+let MODEL = blankModel();
+function mergeSubmission(incoming, submitterName){
+  if(!incoming.tasks) incoming.tasks = [];
+  if(!incoming.edges) incoming.edges = [];
+  if(!incoming.units) incoming.units = [];
+  if(!incoming.stagePurpose) incoming.stagePurpose = {};
+  if(!MODEL.units) MODEL.units = [];
+
+  function findOrCreateUnit(name){
+    const norm = normalizeOrgName(name);
+    let u = MODEL.units.find(u=> normalizeOrgName(u.name)===norm);
+    if(!u){ u = { id: uid('u'), name: norm||'未命名單位', collapsed:false, roles:[] }; MODEL.units.push(u); }
+    else if(u.name !== norm && norm) u.name = norm;
+    return u;
+  }
+  function findOrCreateRole(unit, name){
+    if(!unit.roles) unit.roles = [];
+    const norm = normalizeOrgName(name);
+    let r = unit.roles.find(r=> normalizeOrgName(r.name)===norm);
+    if(!r){ r = { id: uid('r'), name: norm||'未命名角色', collapsed:false }; unit.roles.push(r); }
+    else if(r.name !== norm && norm) r.name = norm;
+    return r;
+  }
+  const unitMap = {}, roleMap = {};
+  incoming.units.forEach(iu=>{
+    const u = findOrCreateUnit(iu.name);
+    unitMap[iu.id] = u;
+    (iu.roles||[]).forEach(ir=>{ roleMap[ir.id] = findOrCreateRole(u, ir.name); });
+  });
+
+  const nodeIdMap = {};
+  incoming.tasks.forEach(t=>{
+    const newNodes = (t.nodes||[]).map(n=>{
+      const nid = uid('n');
+      nodeIdMap[n.id] = nid;
+      return Object.assign({}, n, { id: nid });
+    });
+    const stageMeta = t.stageMeta || {};
+    STAGE_DEFS.forEach(sd=>{ if(!stageMeta[sd.id]) stageMeta[sd.id] = {entry:'',decision:'',exit:'',deliverables:''}; });
+    const resolvedUnit = (t.unitId!=null) ? unitMap[t.unitId] : null;
+    const resolvedRole = (t.roleId!=null) ? roleMap[t.roleId] : null;
+    MODEL.tasks.push({
+      id: uid('t'),
+      name: t.name || '新任務',
+      collapsed: false,
+      unitId: resolvedUnit ? resolvedUnit.id : null,
+      roleId: resolvedRole ? resolvedRole.id : null,
+      stageMeta,
+      nodes: newNodes,
+      submitterName: submitterName,
+    });
+  });
+
+  incoming.edges.forEach(e=>{
+    if(nodeIdMap[e.from]==null || nodeIdMap[e.to]==null) return;
+    MODEL.edges.push(Object.assign({}, e, { id: uid('e'), from: nodeIdMap[e.from], to: nodeIdMap[e.to] }));
+  });
+
+  STAGE_DEFS.forEach(sd=>{
+    const cur = (MODEL.stagePurpose[sd.id]||'').trim();
+    if(!cur && incoming.stagePurpose[sd.id]) MODEL.stagePurpose[sd.id] = incoming.stagePurpose[sd.id];
+  });
+}
+
+/* =========================================================================
+   唯讀渲染管線 —— 跟 flow-builder.html 教學與範例tab的「範例」渲染管線是同一
+   個模式（自己的 node index、plain textContent、沒有任何互動事件），差異是
+   這裡要處理「多個任務、多個人」而不是單一預設任務，所以欄寬計算沿用主工具
+   computeStageLayout() 的多任務版本，而不是範例頁那個單任務版本。
+   ========================================================================= */
+let STAGE_LAYOUT;
+function computeStageLayout(){
+  const colWidth = {};
+  effectiveStageDefs().forEach(sd=> colWidth[sd.id] = STAGE_WIDTH);
+  MODEL.tasks.forEach(task=>{
+    task.nodes.forEach(n=>{
+      const w = n.type==='decision' ? DIA_W : RECT_W;
+      const needed = n.x + w + 60;
+      if(needed > colWidth[n.stageId]) colWidth[n.stageId] = needed;
+    });
+  });
+  const colStart = {};
+  let acc = 0;
+  effectiveStageDefs().forEach(sd=>{ colStart[sd.id] = acc; acc += colWidth[sd.id]; });
+  STAGE_LAYOUT = { colWidth, colStart, totalWidth: acc };
+}
+function globalX(node){ return (STAGE_LAYOUT.colStart[node.stageId]||0) + node.x; }
+
+const mvNodeIndex = {};
+function mvRectOf(el, canvasRect){
+  const r = el.getBoundingClientRect();
+  const cx = (r.left+r.right)/2 - canvasRect.left, cy = (r.top+r.bottom)/2 - canvasRect.top;
+  return { left:r.left-canvasRect.left, right:r.right-canvasRect.left, top:r.top-canvasRect.top, bottom:r.bottom-canvasRect.top, cx, cy };
+}
+function mvSideAnchor(nodeId, side){
+  const info = mvNodeIndex[nodeId];
+  if(!info || !info.el) return { x:0, y:0 };
+  const canvasRect = document.getElementById('canvas').getBoundingClientRect();
+  const r = mvRectOf(info.el, canvasRect);
+  if(side==='top') return { x:(r.left+r.right)/2, y:r.top };
+  if(side==='bottom') return { x:(r.left+r.right)/2, y:r.bottom };
+  if(side==='left') return { x:r.left, y:(r.top+r.bottom)/2 };
+  return { x:r.right, y:(r.top+r.bottom)/2 };
+}
+function renderMergedNode(n, gx){
+  const el = document.createElement('div');
+  el.className = 'node ' + n.type;
+  el.style.left = gx+'px'; el.style.top = n.y+'px';
+  const stageDef = effectiveStageDefs().find(s=>s.id===n.stageId);
+  if(n.type==='decision'){
+    const bg = document.createElement('div'); bg.className='diamond-bg';
+    if(stageDef) bg.style.borderColor = stageDef.color;
+    el.appendChild(bg);
+  }
+  const body = document.createElement('div'); body.className='node-body';
+  if(stageDef && n.type!=='decision') body.style.borderColor = stageDef.color;
+  const title = document.createElement('div'); title.className='node-title'; title.textContent = n.label||'';
+  body.appendChild(title);
+  if(n.owner){
+    const owner = document.createElement('div'); owner.className='node-owner'; owner.textContent = n.owner;
+    body.appendChild(owner);
+  }
+  const desc = document.createElement('div'); desc.className='node-desc'; desc.textContent = n.note||'';
+  body.appendChild(desc);
+  el.appendChild(body);
+  return el;
+}
+function renderMerged(){
+  MODEL.tasks.forEach(task=> task.nodes.forEach(ensureNodeStage));
+  computeStageLayout();
+  Object.keys(mvNodeIndex).forEach(k=> delete mvNodeIndex[k]);
+
+  const canvas = document.getElementById('canvas');
+  const edgeSvg = document.getElementById('edgeSvg');
+  const edgeDeco = document.getElementById('edgeDeco');
+  canvas.querySelectorAll('.stage-header-row, .task-row-outer').forEach(el=>el.remove());
+
+  // header row — read-only stage-purpose text (whichever submission filled
+  // it in first survives, same "don't overwrite" rule as mergeSubmission).
+  const headerRow = document.createElement('div');
+  headerRow.className = 'stage-header-row';
+  const spacer = document.createElement('div'); spacer.className = 'row-label-spacer';
+  headerRow.appendChild(spacer);
+  effectiveStageDefs().forEach((sd, i)=>{
+    const cell = document.createElement('div'); cell.className = 'stage-header-cell';
+    const colW = STAGE_LAYOUT.colWidth[sd.id] || STAGE_WIDTH;
+    cell.style.flex = '0 0 ' + colW + 'px'; cell.style.width = colW + 'px';
+    cell.style.background = tint(sd.color, 0.09);
+    const head = document.createElement('div'); head.className = 'stage-head-title-row';
+    head.style.setProperty('--stage-color', sd.color);
+    head.innerHTML = `<span class="stage-num" style="background:${sd.color}">${i+1}</span><span class="stage-title">${sd.title}</span>`;
+    const purpose = document.createElement('div'); purpose.className = 'stage-purpose'; purpose.textContent = MODEL.stagePurpose[sd.id]||'';
+    cell.appendChild(head); cell.appendChild(purpose);
+    headerRow.appendChild(cell);
+  });
+  canvas.insertBefore(headerRow, edgeSvg);
+
+  let overallMaxY = 150;
+  MODEL.tasks.forEach(task=>{
+    const outer = document.createElement('div'); outer.className = 'task-row-outer';
+    const row = document.createElement('div'); row.className = 'task-row';
+    const label = document.createElement('div'); label.className = 'task-label';
+    const unit = (MODEL.units||[]).find(u=>u.id===task.unitId);
+    const role = unit ? (unit.roles||[]).find(r=>r.id===task.roleId) : null;
+    const tagText = [unit&&unit.name, role&&role.name].filter(Boolean).join(' / ');
+    if(tagText){ const tag = document.createElement('div'); tag.className='task-tag'; tag.textContent = tagText; label.appendChild(tag); }
+    const nameEl = document.createElement('div'); nameEl.className = 'task-name'; nameEl.textContent = task.name;
+    label.appendChild(nameEl);
+    if(task.submitterName){
+      const submitterTag = document.createElement('div'); submitterTag.className = 'mv-submitter-tag';
+      submitterTag.textContent = '提交者：' + task.submitterName;
+      label.appendChild(submitterTag);
+    }
+    row.appendChild(label);
+
+    const wrap = document.createElement('div'); wrap.className = 'task-canvas-wrap';
+    const bands = document.createElement('div'); bands.className = 'task-bg-bands';
+    effectiveStageDefs().forEach(sd=>{
+      const band = document.createElement('div'); band.className = 'task-bg-band';
+      const colW = STAGE_LAYOUT.colWidth[sd.id] || STAGE_WIDTH;
+      band.style.flex = '0 0 ' + colW + 'px'; band.style.width = colW + 'px';
+      band.style.background = tint(sd.color, 0.05);
+      bands.appendChild(band);
+    });
+    wrap.appendChild(bands);
+
+    const track = document.createElement('div'); track.className = 'task-track';
+    let maxY = 150;
+    task.nodes.forEach(n=>{
+      const h = n.type==='decision' ? DIA_H : RECT_H;
+      maxY = Math.max(maxY, n.y+h+40);
+      const el = renderMergedNode(n, globalX(n));
+      track.appendChild(el);
+      mvNodeIndex[n.id] = { node:n, task, el };
+    });
+    track.style.minWidth = STAGE_LAYOUT.totalWidth + 'px';
+    track.style.minHeight = maxY + 'px';
+    overallMaxY = Math.max(overallMaxY, maxY);
+    wrap.appendChild(track);
+    row.appendChild(wrap);
+    outer.appendChild(row);
+    canvas.insertBefore(outer, edgeSvg);
+  });
+
+  requestAnimationFrame(()=>{
+    const totalWidth = STAGE_LAYOUT.totalWidth;
+    // total height = header + every task row stacked — approximate by summing
+    // each task's own maxY (rows are stacked in normal flow, not absolutely
+    // positioned, so the SVG just needs to be at least as tall as the whole
+    // scrollable canvas ends up being).
+    const canvasRect = canvas.getBoundingClientRect();
+    const totalHeight = canvas.scrollHeight;
+    edgeSvg.setAttribute('width', totalWidth); edgeSvg.setAttribute('height', totalHeight);
+    edgeSvg.setAttribute('viewBox', `0 0 ${totalWidth} ${totalHeight}`);
+    if(!edgeSvg.querySelector('defs')){
+      edgeSvg.insertAdjacentHTML('afterbegin', `<defs>
+        <marker id="mvArrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7a7f8c"/></marker>
+        <marker id="mvArrowRed" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker>
+      </defs>`);
+    }
+    edgeSvg.querySelectorAll('path.mv-edge-path').forEach(p=>p.remove());
+    edgeDeco.innerHTML = ''; edgeDeco.style.width = totalWidth+'px'; edgeDeco.style.height = totalHeight+'px';
+    MODEL.edges.forEach(edge=>{
+      const fromInfo = mvNodeIndex[edge.from], toInfo = mvNodeIndex[edge.to];
+      if(!fromInfo || !toInfo) return;
+      const rFrom = mvRectOf(fromInfo.el, canvasRect), rTo = mvRectOf(toInfo.el, canvasRect);
+      const p1 = mvSideAnchor(edge.from, edge.fromSide), p2 = mvSideAnchor(edge.to, edge.toSide);
+      const { d, pts } = buildOrthogonalPath(p1, edge.fromSide, p2, edge.toSide, rFrom, rTo, edge.bendOffset||0);
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('class', 'mv-edge-path');
+      path.setAttribute('d', d);
+      path.setAttribute('stroke', edge.dashed ? '#c0392b' : '#8a8f9c');
+      path.setAttribute('stroke-width', edge.dashed ? '1.75' : '2');
+      if(edge.dashed) path.setAttribute('stroke-dasharray','6,5');
+      path.setAttribute('fill','none');
+      path.setAttribute('marker-end', edge.dashed ? 'url(#mvArrowRed)' : 'url(#mvArrow)');
+      edgeSvg.appendChild(path);
+      if(edge.label){
+        const mid = pathMidpoint(pts);
+        const lbl = document.createElement('div');
+        lbl.className = 'edge-label filled' + (edge.dashed ? ' dashed-label' : '');
+        lbl.style.position = 'absolute'; lbl.style.left = mid.x+'px'; lbl.style.top = mid.y+'px'; lbl.style.transform = 'translate(-50%,-50%)';
+        lbl.textContent = edge.label;
+        edgeDeco.appendChild(lbl);
+      }
+    });
+  });
+}
+
+/* =========================================================================
+   PIN 門檻 + 抓資料 —— 真正的門檻在資料庫端的 get_unit_submissions() 這個
+   RPC 函式裡（PIN對了才回傳資料，PIN錯誤或單位不存在回傳空集合），這裡只是
+   呼叫它、並根據有沒有資料回來決定要不要顯示「PIN錯誤/查無資料」。
+   ========================================================================= */
+let currentUnit = '', currentPin = '';
+function showError(msg){
+  const el = document.getElementById('pinErrorMsg');
+  el.textContent = msg; el.style.display = 'block';
+}
+function clearError(){
+  document.getElementById('pinErrorMsg').style.display = 'none';
+}
+async function loadUnit(unit, pin){
+  clearError();
+  if(!supabaseClient){ showError('尚未設定雲端連線（SUPABASE_URL / SUPABASE_ANON_KEY 還是空的），請洽負責設定 Supabase 的人。'); return; }
+  STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s})); // reset first — otherwise switching from a unit with custom hats to one without would incorrectly keep showing the previous unit's hats
+  let data, error;
+  try{
+    const res = await supabaseClient.rpc('get_unit_submissions', { p_unit: unit, p_pin: pin });
+    data = res.data; error = res.error;
+  }catch(err){ showError('連線失敗：' + (err.message || err)); return; }
+  if(error){ showError('讀取失敗：' + error.message); return; }
+  if(!data || !data.length){ showError('查無資料 — 請確認單位名稱與PIN是否正確，或該單位目前還沒有人「雲端存檔」過。'); return; }
+
+  MODEL = blankModel();
+  uidCounter = 1;
+  data.forEach(row=> mergeSubmission(row.model_json, row.submitter_name));
+
+  // 這個單位如果自己設定過帽子，套用它；沒有的話（回傳null）維持內建預設，
+  // 跟 flow-builder.html 給基層用的邏輯是同一套規則，確保主管跟員工看到的
+  // 是同一組帽子。
+  try{
+    const { data: stageData } = await supabaseClient.rpc('get_unit_stages', { p_unit: unit });
+    if(stageData && Array.isArray(stageData) && stageData.length &&
+       stageData.every(s=> s && typeof s.id==='string' && typeof s.title==='string' && typeof s.color==='string')){
+      STAGE_DEFS = stageData;
+    }
+  }catch(err){ /* 讀不到帽子設定不影響彙整資料本身顯示，用預設繼續 */ }
+
+  document.getElementById('pinGateOverlay').classList.remove('open');
+  document.getElementById('mvToolbar').style.display = '';
+  document.getElementById('mvLegend').style.display = '';
+  document.getElementById('mvMainLayout').style.display = '';
+  const latest = new Date(Math.max(...data.map(r=> new Date(r.updated_at).getTime())));
+  document.getElementById('mvSummary').textContent =
+    `單位：${unit}　共 ${data.length} 份雲端存檔　最新更新：${latest.toLocaleString('zh-TW')}`;
+  renderMerged();
+}
+document.getElementById('pinConfirmBtn').onclick = ()=>{
+  const unit = normalizeOrgName(document.getElementById('pinUnitInput').value);
+  const pin = document.getElementById('pinCodeInput').value.trim();
+  if(!unit || !pin){ showError('單位與PIN都要填。'); return; }
+  currentUnit = unit; currentPin = pin;
+  loadUnit(unit, pin);
+};
+
+/* =========================================================================
+   帽子設定 —— 沿用剛剛驗證過的同一組單位PIN（currentUnit/currentPin），
+   不需要另一套admin PIN。編輯內容存在本地變數 editingStages，按「儲存」
+   才真正呼叫 update_unit_stages() 寫回去；取消不會動到任何東西。
+   ========================================================================= */
+let editingStages = [];
+function renderStageEditorList(){
+  const list = document.getElementById('stageEditorList');
+  list.innerHTML = '';
+  editingStages.forEach((sd, i)=>{
+    const row = document.createElement('div'); row.className = 'stage-editor-row';
+    const colorInput = document.createElement('input'); colorInput.type = 'color'; colorInput.value = sd.color || '#8a8f9c';
+    colorInput.oninput = ()=>{ sd.color = colorInput.value; };
+    const titleInput = document.createElement('input'); titleInput.type = 'text'; titleInput.value = sd.title; titleInput.placeholder = '帽子標題';
+    titleInput.oninput = ()=>{ sd.title = titleInput.value; };
+    const upBtn = document.createElement('button'); upBtn.textContent = '↑'; upBtn.disabled = (i===0);
+    upBtn.onclick = ()=>{ [editingStages[i-1], editingStages[i]] = [editingStages[i], editingStages[i-1]]; renderStageEditorList(); };
+    const downBtn = document.createElement('button'); downBtn.textContent = '↓'; downBtn.disabled = (i===editingStages.length-1);
+    downBtn.onclick = ()=>{ [editingStages[i+1], editingStages[i]] = [editingStages[i], editingStages[i+1]]; renderStageEditorList(); };
+    const delBtn = document.createElement('button'); delBtn.textContent = '✕';
+    delBtn.onclick = ()=>{
+      if(!confirm(`刪除帽子「${sd.title}」？已經歸在這個帽子下的舊資料不會消失（仍會顯示，標成「已移除的帽子」），但以後這個單位的人都不能再往裡面加新內容，也選不到這個帽子了。`)) return;
+      editingStages.splice(i, 1);
+      renderStageEditorList();
+    };
+    row.appendChild(colorInput); row.appendChild(titleInput); row.appendChild(upBtn); row.appendChild(downBtn); row.appendChild(delBtn);
+    list.appendChild(row);
+  });
+}
+document.getElementById('stageEditorOpenBtn').onclick = ()=>{
+  if(!requireSupabaseForEditor()) return;
+  editingStages = JSON.parse(JSON.stringify(STAGE_DEFS));
+  document.getElementById('stageEditorUnitLabel').textContent = currentUnit;
+  renderStageEditorList();
+  document.getElementById('stageEditorOverlay').classList.add('open');
+};
+function requireSupabaseForEditor(){
+  if(supabaseClient) return true;
+  alert('尚未設定雲端連線（SUPABASE_URL / SUPABASE_ANON_KEY 還是空的）。');
+  return false;
+}
+document.getElementById('stageEditorAddBtn').onclick = ()=>{
+  const title = prompt('新帽子的標題：', '新帽子');
+  if(!title || !title.trim()) return;
+  const id = 'stage_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+  editingStages.push({ id, title: title.trim(), color: '#8a8f9c' });
+  renderStageEditorList();
+};
+document.getElementById('stageEditorCancelBtn').onclick = ()=>{
+  document.getElementById('stageEditorOverlay').classList.remove('open');
+};
+document.getElementById('stageEditorSaveBtn').onclick = async ()=>{
+  if(!editingStages.length){ alert('至少要保留一個帽子。'); return; }
+  if(editingStages.some(s=> !s.title || !s.title.trim())){ alert('每個帽子都要填標題。'); return; }
+  try{
+    const { data, error } = await supabaseClient.rpc('update_unit_stages', {
+      p_unit: currentUnit, p_stages: editingStages, p_pin: currentPin,
+    });
+    if(error) throw error;
+    if(!data){ alert('儲存失敗：PIN不正確，或帽子清單是空的。'); return; }
+    STAGE_DEFS = editingStages;
+    document.getElementById('stageEditorOverlay').classList.remove('open');
+    renderMerged();
+    alert('已儲存新的帽子設定，並套用到目前的彙整畫面。');
+  }catch(err){
+    alert('儲存失敗：' + (err.message || err));
+  }
+};
+document.getElementById('pinCodeInput').addEventListener('keydown', (e)=>{
+  if(e.key === 'Enter') document.getElementById('pinConfirmBtn').click();
+});
+document.getElementById('mvRefreshBtn').onclick = ()=> loadUnit(currentUnit, currentPin);
+document.getElementById('mvSwitchUnitBtn').onclick = ()=>{
+  document.getElementById('mvToolbar').style.display = 'none';
+  document.getElementById('mvLegend').style.display = 'none';
+  document.getElementById('mvMainLayout').style.display = 'none';
+  document.getElementById('pinGateOverlay').classList.add('open');
+};
+</script>
+</body>
+</html>
