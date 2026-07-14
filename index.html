@@ -29,13 +29,17 @@
      bands: #66828E for the top toolbar, #586D80 for the left task-name
      column. These are dark enough that text/icons inside them switch to
      white rather than the --m-ink/--m-muted used elsewhere. */
+  /* --tb-bg is now used ONLY by the 教學與範例 modal header (kept dark-teal
+     so that modal keeps its own identity); the top .toolbar switched to a
+     white header (--header-bg) per Jerry's "上面白色" request, so it no
+     longer reads off --tb-bg at all. */
   --tb-bg:#66828e; --tb-bg-dark:#56717c;
-  --tl-bg:#586d80; --tl-bg-dark:#46596a;
-  /* deeper warm-taupe Morandi for the org-structure side panel — a distinct
-     hue family from the cool teal toolbar/task-list bands above, but still
-     within the same dusty/muted Morandi register (shares its hue with
-     --m-accent/--m-danger) so the two bands read as coordinated, not clashing. */
-  --sp-bg:#8a7a6d; --sp-bg-dark:#6f6156;
+  --header-bg:#ffffff; --header-border:#e3ddee;
+  /* left side (task-label column + org side panel) is purple per Jerry's
+     "左邊紫色" request — two shades of the same muted-purple family so the
+     two bands read as coordinated, not clashing. */
+  --tl-bg:#6a5c86; --tl-bg-dark:#544869;
+  --sp-bg:#7c6a99; --sp-bg-dark:#635277;
 }
 *{box-sizing:border-box;}
 html,body{margin:0; height:100%;}
@@ -44,10 +48,12 @@ button{font-family:inherit; cursor:pointer;}
 input,textarea{font-family:inherit;}
 
 /* ---------- toolbar ---------- */
-.toolbar{position:sticky; top:0; z-index:100; background:var(--tb-bg); border-bottom:1px solid var(--tb-bg-dark);
+.toolbar{position:sticky; top:0; z-index:100; background:var(--header-bg); border-bottom:1px solid var(--header-border);
   display:flex; align-items:center; gap:10px; padding:10px 18px; flex-wrap:wrap;}
-.brand{display:flex; align-items:center; gap:8px; font-weight:800; font-size:14.5px; white-space:nowrap; color:#fff;}
-.brand .dot{width:9px; height:9px; border-radius:50%; background:#fff;}
+.brand{display:flex; align-items:center; gap:8px; font-weight:800; font-size:14.5px; white-space:nowrap; color:var(--ink);}
+.brand .dot{width:9px; height:9px; border-radius:50%; background:var(--accent);}
+.tb-link{border:none; background:transparent; color:var(--muted); font-size:12px; padding:4px 6px; border-radius:6px; white-space:nowrap;}
+.tb-link:hover{color:var(--accent-ink); background:var(--m-bg);}
 .tbtn{border:1px solid var(--m-border); background:var(--m-surface); color:var(--m-ink); border-radius:8px; padding:6px 11px; font-size:12.5px; white-space:nowrap; transition:.15s;}
 .tbtn:hover{border-color:var(--m-accent); color:var(--m-accent-ink);}
 .tbtn.primary{background:var(--m-accent); color:#fff; border-color:var(--m-accent);}
@@ -100,12 +106,6 @@ input,textarea{font-family:inherit;}
 .tiny-modal-actions .tm-primary{background:var(--m-accent); color:var(--m-accent-ink);}
 .tiny-modal-actions .tm-secondary{background:transparent; color:var(--m-muted);}
 
-.legend-bar{display:flex; gap:16px; align-items:center; padding:6px 18px; font-size:11px; color:var(--m-muted); background:var(--m-surface); border-bottom:1px solid var(--m-border); flex-wrap:wrap;}
-.legend-bar span{display:inline-flex; align-items:center; gap:5px;}
-.leg-box{width:13px; height:13px; border-radius:3px; display:inline-block;}
-.leg-dia{width:11px; height:11px; display:inline-block; clip-path:polygon(50% 2%, 98% 50%, 50% 98%, 2% 50%);}
-.leg-line{width:16px; height:0; border-top:2px solid var(--m-muted); display:inline-block;}
-.leg-line.dashed{border-top-style:dashed; border-color:var(--red);}
 
 /* ---------- main layout: left org/file side panel + scrollable canvas ---------- */
 .main-layout{display:flex; height:calc(100vh - 84px);}
@@ -144,8 +144,8 @@ input,textarea{font-family:inherit;}
 /* small "篩選中：X ✕" pill that shows in the legend bar whenever a task
    filter is active, so it's obvious why other tasks disappeared even if the
    side panel is scrolled out of view. */
-.legend-bar .filter-status{display:none; align-items:center; gap:6px; margin-left:auto; background:var(--m-accent); color:#fff; border-radius:6px; padding:3px 6px 3px 10px; font-weight:700;}
-.legend-bar .filter-status.show{display:inline-flex;}
+.filter-status{display:none; align-items:center; gap:6px; background:var(--m-accent); color:#fff; border-radius:6px; padding:3px 6px 3px 10px; font-weight:700; font-size:11px;}
+.filter-status.show{display:inline-flex;}
 .filter-clear-btn{border:none; background:rgba(255,255,255,.25); color:#fff; border-radius:50%; width:16px; height:16px; font-size:10px; line-height:16px; padding:0;}
 .filter-clear-btn:hover{background:rgba(255,255,255,.45);}
 .task-tag{font-size:9.5px; color:#fff; background:rgba(255,255,255,.2); border-radius:4px; padding:1px 5px; display:inline-block; align-self:flex-start;}
@@ -340,7 +340,7 @@ input,textarea{font-family:inherit;}
 .edge-bend-handle.axis-y{cursor:ns-resize;}
 .edge-bend-handle.axis-x{cursor:ew-resize;}
 
-@media print{ .toolbar,.legend-bar{display:none;} }
+@media print{ .toolbar{display:none;} }
 
 /* ---------- unified login gate + manager/master merged view ----------
    Ported from manager-view.html when the two files were merged into one
@@ -350,12 +350,15 @@ input,textarea{font-family:inherit;}
 .tiny-modal-card select{width:100%; box-sizing:border-box; border:1px solid var(--m-border); border-radius:7px; padding:7px 9px; font-size:12.5px; background:#fff; color:var(--m-ink);}
 .tiny-modal-card.login-card{width:min(400px,92vw);}
 .login-hint{font-size:10.5px; color:var(--m-muted-soft); margin-top:2px;}
-.save-status{font-size:11px; color:rgba(255,255,255,.85); margin-left:6px; white-space:nowrap;}
-.save-status.error{color:#ffd7d2;}
+.save-status{font-size:11px; color:var(--muted); margin-left:6px; white-space:nowrap;}
+.save-status.error{color:var(--red);}
+.mv-summary-text{font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .mv-submitter-tag{font-size:9px; color:var(--m-muted); margin-top:2px;}
 .mv-note{color:var(--m-muted);}
 .master-div-btn{display:block; width:100%; text-align:left; margin-bottom:6px;}
 .master-div-btn.active{background:var(--m-accent); color:#fff; border-style:solid; border-color:var(--m-accent);}
+.stage-editor-card{width:min(440px,92vw);}
+.stage-editor-list{max-height:320px; overflow-y:auto; margin:4px 0 2px;}
 .stage-editor-row{display:flex; align-items:center; gap:6px; margin-bottom:6px;}
 .stage-editor-row input[type=text]{flex:1;}
 .stage-editor-row input[type=color]{width:32px; height:28px; border:1px solid var(--m-border); border-radius:5px; padding:0; flex:0 0 32px;}
@@ -373,19 +376,14 @@ input,textarea{font-family:inherit;}
   <div class="tb-right">
     <button class="tbtn" id="saveDataBtn">儲存資料</button>
     <span class="save-status" id="saveStatusText"></span>
-    <button class="tbtn" id="openHelpModalBtn">教學與範例</button>
+    <span class="filter-status" id="filterStatus"></span>
+    <button class="tb-link" id="openHelpModalBtn">教學與範例</button>
+    <button class="tb-link" id="switchIdentityBtn">登出</button>
     <div class="export-dropdown" id="exportDropdown">
       <button class="tbtn primary" id="exportMenuBtn">Export ▾</button>
       <div class="export-menu" id="exportMenu">
         <button class="export-item" id="exportMdBtn">匯出 Markdown</button>
-        <button class="export-item" id="exportJsonBtn">匯出 JSON</button>
-        <button class="export-item filebtn">匯入 JSON（取代整份）<input type="file" id="importJsonInput" accept=".json,application/json"></button>
-        <button class="export-item filebtn" title="把其他人回填的 JSON 檔彙整進這份大表，不會覆蓋現有內容">合併匯入 JSON（彙整多人）<input type="file" id="mergeImportInput" accept=".json,application/json"></button>
-        <div class="export-menu-sep"></div>
-        <button class="export-item" id="reloadStagesBtn" title="如果你的單位主管剛剛更新了帽子設定，點這裡立刻套用，不用重新整理網頁">🔄 重新載入帽子設定</button>
-        <div class="export-menu-sep"></div>
-        <button class="export-item" id="switchIdentityBtn">切換身份 / 登出</button>
-        <button class="export-item danger" id="resetBtn">清空畫布</button>
+        <button class="export-item" id="exportPdfBtn">匯出成 PDF</button>
       </div>
     </div>
   </div>
@@ -396,10 +394,12 @@ input,textarea{font-family:inherit;}
 <div class="toolbar" id="mvToolbar" style="display:none;">
   <div class="brand"><span class="dot"></span> Flow 繪製工具</div>
   <div class="tb-right">
-    <span id="mvSummary" style="color:rgba(255,255,255,.85); font-size:12px;"></span>
-    <button class="tbtn" id="stageEditorOpenBtn" title="設定這個單位底下大家共用的帽子（步驟階段）">⚙ 帽子設定</button>
+    <span id="mvSummary" class="mv-summary-text"></span>
+    <!-- 只有一般主管模式看得到（isMasterMode時由JS隱藏）——因為改Stage要用
+         該單位自己的PIN寫回，Master沒有單一單位的PIN可以拿來寫。 -->
+    <button class="tbtn" id="stageEditorOpenBtn">⚙ 設定 Stage</button>
     <button class="tbtn" id="mvRefreshBtn">重新整理</button>
-    <button class="tbtn" id="mvSwitchUnitBtn">切換身份 / 登出</button>
+    <button class="tb-link" id="mvSwitchUnitBtn">登出</button>
   </div>
 </div>
 
@@ -422,8 +422,6 @@ input,textarea{font-family:inherit;}
     <input type="password" id="loginPinInput" placeholder="向管理者索取" />
     <label>姓名<span class="login-hint">（Master／主管檢視不需填）</span></label>
     <input type="text" id="loginNameInput" placeholder="例如：王小明" />
-    <label>部門／角色<span class="login-hint">（例如：Marketing - Social Planner）</span></label>
-    <input type="text" id="loginRoleInput" placeholder="例如：Marketing - Social Planner" />
     <div class="tiny-modal-actions">
       <button class="tm-primary" id="loginConfirmBtn">登入</button>
     </div>
@@ -431,34 +429,20 @@ input,textarea{font-family:inherit;}
   </div>
 </div>
 
-<!-- 帽子設定 —— 只在「主管（非master）」模式下用得到，用登入時輸入的同一組
-     單位PIN當門檻，不需要另外的admin密碼。 -->
+<!-- Stage 設定：只有一般主管模式（非master）能打開，見 stageEditorOpenBtn
+     的 onclick。改的是currentUnit這個單位自己的Stage，靠currentUnit/currentPin
+     沿用登入時已經驗證過的PIN寫回，不需要另一組管理員密碼。 -->
 <div class="tiny-modal-overlay" id="stageEditorOverlay">
-  <div class="tiny-modal-card" style="width:min(520px,92vw);">
-    <h3>帽子設定 — <span id="stageEditorUnitLabel"></span></h3>
-    <p class="tiny-modal-desc">這裡設定的帽子（步驟階段）會套用到這個單位底下所有角色/員工存檔時使用的畫布結構，跟其他單位互不影響。改標題/顏色不會動到既有資料；刪除整個帽子後，已經歸在那個帽子下的舊資料仍會顯示（標成「已移除的帽子」），只是沒辦法再往裡面加新內容。</p>
-    <div id="stageEditorList"></div>
-    <button class="stage-editor-add-btn" id="stageEditorAddBtn">＋ 新增帽子</button>
+  <div class="tiny-modal-card stage-editor-card">
+    <h3>設定 Stage</h3>
+    <p class="tiny-modal-desc">單位：<span id="stageEditorUnitLabel"></span>　可以新增、調整順序、改名改色、刪除。</p>
+    <div class="stage-editor-list" id="stageEditorList"></div>
+    <button class="stage-editor-add-btn" id="stageEditorAddBtn">＋ 新增 Stage</button>
     <div class="tiny-modal-actions">
       <button class="tm-secondary" id="stageEditorCancelBtn">取消</button>
-      <button class="tm-primary" id="stageEditorSaveBtn">儲存帽子設定</button>
+      <button class="tm-primary" id="stageEditorSaveBtn">儲存</button>
     </div>
   </div>
-</div>
-
-<div class="legend-bar" id="staffLegend" style="display:none;">
-  <span><span class="leg-box" style="background:var(--rect-bg); border:1.5px solid var(--rect-border);"></span> 方形＝步驟（含名稱＋描述）</span>
-  <span><span class="leg-dia" style="background:var(--dia-bg); border:1.5px solid var(--dia-border);"></span> 菱形＝判斷</span>
-  <span><span class="leg-line"></span> 一般連線</span>
-  <span><span class="leg-line dashed"></span> 退回 / Rollback 連線</span>
-  <span class="filter-status" id="filterStatus"></span>
-</div>
-<div class="legend-bar" id="mvLegend" style="display:none;">
-  <span><span class="leg-box" style="background:var(--rect-bg); border:1.5px solid var(--rect-border);"></span> 方形＝步驟（含名稱／當下角色／描述）</span>
-  <span><span class="leg-dia" style="background:var(--dia-bg); border:1.5px solid var(--dia-border);"></span> 菱形＝判斷</span>
-  <span><span class="leg-line"></span> 實線＝正常流程</span>
-  <span><span class="leg-line dashed"></span> 退回 / Rollback 連線</span>
-  <span class="mv-note" style="margin-left:auto;">唯讀彙整畫面，內容為各人最後一次「儲存資料」時的版本，不是即時同步。</span>
 </div>
 
 <div class="main-layout" id="mainLayout" style="display:none;">
@@ -701,7 +685,7 @@ function effectiveStageDefs(){
     if(n.stageId && !known.has(n.stageId) && !orphanIds.includes(n.stageId)) orphanIds.push(n.stageId);
   }));
   if(!orphanIds.length) return STAGE_DEFS;
-  return STAGE_DEFS.concat(orphanIds.map(id=>({ id, title:'（已移除的帽子）', color:'#9aa0a6' })));
+  return STAGE_DEFS.concat(orphanIds.map(id=>({ id, title:'（已移除的 Stage）', color:'#9aa0a6' })));
 }
 /* Normalizes a unit/role name for storage and for merge-matching: trims
    stray whitespace and forces any English letters to uppercase (CJK
@@ -2098,38 +2082,15 @@ function download(filename, text){
 }
 
 document.getElementById('exportMdBtn').onclick = ()=> download((MODEL.name||'flow').replace(/\s+/g,'_')+'.md', exportMarkdown());
-document.getElementById('exportJsonBtn').onclick = ()=> download((MODEL.name||'flow').replace(/\s+/g,'_')+'.json', JSON.stringify(MODEL, null, 2));
-
-document.getElementById('importJsonInput').addEventListener('change', function(e){
-  const file = e.target.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    try{
-      const parsed = JSON.parse(reader.result);
-      if(!parsed.tasks) parsed.tasks = [];
-      if(!parsed.edges) parsed.edges = [];
-      if(!parsed.stagePurpose) parsed.stagePurpose = {};
-      if(!parsed.units) parsed.units = [];
-      STAGE_DEFS.forEach(sd=>{ if(parsed.stagePurpose[sd.id]==null) parsed.stagePurpose[sd.id] = ''; });
-      parsed.units.forEach(u=>{
-        if(typeof u.collapsed !== 'boolean') u.collapsed = false;
-        if(!u.roles) u.roles = [];
-        u.roles.forEach(r=>{ if(typeof r.collapsed !== 'boolean') r.collapsed = false; });
-      });
-      parsed.tasks.forEach(t=>{
-        if(!t.stageMeta) t.stageMeta = {};
-        STAGE_DEFS.forEach(sd=>{ if(!t.stageMeta[sd.id]) t.stageMeta[sd.id] = {entry:'',decision:'',exit:'',deliverables:''}; });
-        if(typeof t.collapsed !== 'boolean') t.collapsed = false;
-        if(t.unitId===undefined) t.unitId = null;
-        if(t.roleId===undefined) t.roleId = null;
-      });
-      MODEL = parsed;
-      renderAll();
-    }catch(err){ alert('JSON 格式錯誤，無法匯入：'+err.message); }
-  };
-  reader.readAsText(file);
-  e.target.value = '';
-});
+/* 匯出成PDF：故意不用額外的PDF函式庫（jsPDF等），直接呼叫瀏覽器內建的列印
+   對話框，讓使用者自己選「另存為PDF」——不用多載入任何東西，維持這個工具
+   一直以來的「單檔案、免安裝」原則。@media print 那條CSS規則已經把
+   toolbar藏起來，列印出來的就是乾淨的畫布內容。 */
+document.getElementById('exportPdfBtn').onclick = ()=> window.print();
+/* 匯出JSON / 匯入JSON / 合併匯入JSON 這幾個按鈕已經移除（現在有Supabase
+   資料庫即時存檔，不再需要靠交換JSON檔案來備份/彙整）。mergeImportModel()
+   本身留著沒刪，純粹是以防之後還是有人需要離線合併的情境，目前沒有任何
+   按鈕會呼叫到它。 */
 
 /* =========================================================================
    8b. MERGE-IMPORT — for consolidating flows collected by different people.
@@ -2224,21 +2185,6 @@ function mergeImportModel(incoming){
   return { importedTaskCount, importedEdgeCount };
 }
 
-document.getElementById('mergeImportInput').addEventListener('change', function(e){
-  const file = e.target.files[0]; if(!file) return;
-  const reader = new FileReader();
-  reader.onload = ()=>{
-    try{
-      const parsed = JSON.parse(reader.result);
-      const { importedTaskCount, importedEdgeCount } = mergeImportModel(parsed);
-      renderAll();
-      alert(`合併匯入完成：新增了 ${importedTaskCount} 個任務、${importedEdgeCount} 條連接線，原有內容未被覆蓋。`);
-    }catch(err){ alert('JSON 格式錯誤，無法合併匯入：'+err.message); }
-  };
-  reader.readAsText(file);
-  e.target.value = '';
-});
-
 document.getElementById('addUnitBtn').onclick = ()=>{
   const name = prompt('新單位名稱（例如：UX部門 / UI部門 / PM部門）：', '新單位');
   if(name===null) return;
@@ -2247,13 +2193,9 @@ document.getElementById('addUnitBtn').onclick = ()=>{
   renderAll();
 };
 
-document.getElementById('resetBtn').onclick = ()=>{
-  if(!confirm('確定要清空整個畫布嗎？此動作無法復原（建議先匯出 JSON 備份）。')) return;
-  MODEL = blankModel();
-  renderAll();
-};
+/* 「清空畫布」按鈕已移除（Export選單簡化後不再提供）。
 
-/* =========================================================================
+   =========================================================================
    8c. 統一登入頁 + 雲端存讀 —— 合併自舊版 manager-view.html。進來一律先看
    loginGateOverlay：選單位（Div1~4／Master）＋輸入PIN。PIN 是 asus（非
    Master）→員工畫圖模式；PIN 對上 Supabase 裡該單位（或Master）真正存的
@@ -2306,12 +2248,10 @@ async function tryAutoLoadMySubmission(idn){
 }
 async function enterStaffMode(idn){
   identity = idn;
-  saveIdentity({ name: idn.name, role: idn.role }); // 單位每次登入重選，不快取
+  saveIdentity({ name: idn.name }); // 單位每次登入重選，不快取
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('mvToolbar').style.display = 'none';
-  document.getElementById('mvLegend').style.display = 'none';
   document.getElementById('staffToolbar').style.display = '';
-  document.getElementById('staffLegend').style.display = '';
   document.getElementById('mainLayout').style.display = '';
   document.getElementById('sidePanel').style.display = '';
   MODEL = blankModel(); uidCounter = 1;
@@ -2321,12 +2261,11 @@ async function enterStaffMode(idn){
 }
 function resetToLoginGate(){
   document.getElementById('staffToolbar').style.display = 'none';
-  document.getElementById('staffLegend').style.display = 'none';
   document.getElementById('mvToolbar').style.display = 'none';
-  document.getElementById('mvLegend').style.display = 'none';
   document.getElementById('mainLayout').style.display = 'none';
   document.getElementById('masterDivPicker').style.display = 'none';
   document.getElementById('sidePanel').style.display = '';
+  document.getElementById('stageEditorOverlay').classList.remove('open');
   const pinInput = document.getElementById('loginPinInput'); if(pinInput) pinInput.value = '';
   const statusEl = document.getElementById('saveStatusText'); if(statusEl){ statusEl.textContent=''; statusEl.classList.remove('error'); }
   identity = null; currentUnit=''; currentPin=''; isMasterMode=false;
@@ -2340,32 +2279,44 @@ async function handleLogin(){
   const unit = document.getElementById('loginUnitSelect').value;
   const pin = document.getElementById('loginPinInput').value.trim();
   const name = document.getElementById('loginNameInput').value.trim();
-  const role = normalizeOrgName(document.getElementById('loginRoleInput').value);
   if(!pin){ showLoginError('PIN 碼要填。'); return; }
   if(unit === 'MASTER' && pin.toLowerCase() === 'asus'){
     showLoginError('Master 沒有「asus」這種登入方式，請改選 Div1~Div4 開始畫圖，或改輸入 Master 專屬 PIN 查看跨單位彙整。');
     return;
   }
   if(unit !== 'MASTER' && pin.toLowerCase() === 'asus'){
-    if(!name || !role){ showLoginError('姓名與部門／角色都要填才能開始畫。'); return; }
-    enterStaffMode({ name, unit, role });
+    if(!name){ showLoginError('姓名要填才能開始畫。'); return; }
+    /* role欄位（部門/角色，原本是自由輸入）已依Jerry指示移除；固定傳空字串
+       滿足資料庫submitter_role的not-null限制。已知取捨：同單位同名的兩個人
+       現在完全無法區分（原本role還能多一層區隔），會被當成同一人、後存的
+       覆蓋先存的——這是拿掉這個欄位必然的代價，不是bug。 */
+    enterStaffMode({ name, unit, role: '' });
     return;
   }
   if(!requireSupabase()) return;
-  if(unit === 'MASTER'){
-    enterMasterMode(pin);
-  } else {
-    try{
-      const { data, error } = await supabaseClient.rpc('get_unit_submissions', { p_unit: unit, p_pin: pin });
+  /* PIN對不對，跟「這個單位/master目前有沒有任何存檔資料」是兩件事——先用
+     verify_unit_pin/verify_master_pin單獨驗證PIN本身，PIN對了就一定放行
+     進畫面（可能是空畫布，但至少能先設定帽子），不再要求「PIN對＋剛好有
+     資料」兩個條件同時成立才能進去。 */
+  try{
+    if(unit === 'MASTER'){
+      const { data: ok, error } = await supabaseClient.rpc('verify_master_pin', { p_pin: pin });
       if(error){ showLoginError('讀取失敗：' + error.message); return; }
-      if(!data || !data.length){ showLoginError('查無資料 — 請確認單位與PIN是否正確，或該單位目前還沒有人「儲存資料」過。'); return; }
-      enterManagerMode(data, unit, pin);
-    }catch(err){ showLoginError('連線失敗：' + (err.message || err)); }
-  }
+      if(!ok){ showLoginError('Master PIN 不正確。'); return; }
+      enterMasterMode(pin);
+    } else {
+      const { data: ok, error } = await supabaseClient.rpc('verify_unit_pin', { p_unit: unit, p_pin: pin });
+      if(error){ showLoginError('讀取失敗：' + error.message); return; }
+      if(!ok){ showLoginError('單位或PIN不正確。'); return; }
+      const { data, error: err2 } = await supabaseClient.rpc('get_unit_submissions', { p_unit: unit, p_pin: pin });
+      if(err2){ showLoginError('讀取失敗：' + err2.message); return; }
+      enterManagerMode(data || [], unit, pin);
+    }
+  }catch(err){ showLoginError('連線失敗：' + (err.message || err)); }
 }
 document.getElementById('loginConfirmBtn').onclick = handleLogin;
 document.getElementById('loginPinInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleLogin(); });
-document.getElementById('loginRoleInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleLogin(); });
+document.getElementById('loginNameInput').addEventListener('keydown', (e)=>{ if(e.key==='Enter') handleLogin(); });
 document.getElementById('switchIdentityBtn').onclick = resetToLoginGate;
 
 /* =========================================================================
@@ -2596,9 +2547,7 @@ async function enterManagerMode(rows, unit, pin){
   currentUnit = unit; currentPin = pin;
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('staffToolbar').style.display = 'none';
-  document.getElementById('staffLegend').style.display = 'none';
   document.getElementById('mvToolbar').style.display = '';
-  document.getElementById('mvLegend').style.display = '';
   document.getElementById('mainLayout').style.display = '';
   document.getElementById('sidePanel').style.display = 'none';
   document.getElementById('masterDivPicker').style.display = 'none';
@@ -2616,8 +2565,9 @@ async function enterManagerMode(rows, unit, pin){
     }
   }catch(err){ /* 讀不到帽子設定不影響彙整資料本身顯示，用預設繼續 */ }
 
-  const latest = new Date(Math.max(...rows.map(r=> new Date(r.updated_at).getTime())));
-  document.getElementById('mvSummary').textContent = `單位：${currentUnit}　共 ${rows.length} 份儲存資料　最新更新：${latest.toLocaleString('zh-TW')}`;
+  document.getElementById('mvSummary').textContent = rows.length
+    ? `單位：${currentUnit}　共 ${rows.length} 份儲存資料　最新更新：${new Date(Math.max(...rows.map(r=> new Date(r.updated_at).getTime()))).toLocaleString('zh-TW')}`
+    : `單位：${currentUnit}　目前尚無任何存檔（可以先在上方「⚙ 設定 Stage」設定好 Stage，等大家開始存檔）`;
   renderMerged();
 }
 
@@ -2633,14 +2583,12 @@ async function enterMasterMode(pin){
   currentPin = pin;
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('staffToolbar').style.display = 'none';
-  document.getElementById('staffLegend').style.display = 'none';
   document.getElementById('mvToolbar').style.display = '';
-  document.getElementById('mvLegend').style.display = '';
   document.getElementById('mainLayout').style.display = '';
   document.getElementById('sidePanel').style.display = 'none';
   document.getElementById('masterDivPicker').style.display = '';
   document.getElementById('stageEditorOpenBtn').style.display = 'none';
-  await loadMasterUnit('DIV1'); // 預設先看第一個Div，同時這一步也是實際驗證master PIN是否正確的地方
+  await loadMasterUnit('DIV1'); // 預設先看第一個Div；master PIN本身已在handleLogin用verify_master_pin驗證過，這裡不會再把「這個Div沒資料」誤判成PIN錯
 }
 function setActiveMasterDivBtn(unit){
   document.querySelectorAll('.master-div-btn').forEach(b=> b.classList.toggle('active', b.dataset.unit===unit));
@@ -2654,12 +2602,6 @@ async function loadMasterUnit(unit){
     if(error){ document.getElementById('mvSummary').textContent = `讀取失敗：${error.message}`; return; }
     STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s}));
     MODEL = blankModel(); uidCounter = 1;
-    if(!data || !data.length){
-      document.getElementById('mvSummary').textContent = `單位：${unit}　目前查無資料（可能還沒有人存檔，或Master PIN不正確）`;
-      renderMerged();
-      return;
-    }
-    data.forEach(row=> mergeSubmission(row.model_json, row.submitter_name));
     try{
       const { data: stageData } = await supabaseClient.rpc('get_unit_stages', { p_unit: unit });
       if(stageData && Array.isArray(stageData) && stageData.length &&
@@ -2667,6 +2609,12 @@ async function loadMasterUnit(unit){
         STAGE_DEFS = stageData;
       }
     }catch(err){ /* 讀不到帽子設定不影響彙整資料本身顯示，用預設繼續 */ }
+    if(!data || !data.length){
+      document.getElementById('mvSummary').textContent = `單位：${unit}　目前尚無任何存檔`;
+      renderMerged();
+      return;
+    }
+    data.forEach(row=> mergeSubmission(row.model_json, row.submitter_name));
     const latest = new Date(Math.max(...data.map(r=> new Date(r.updated_at).getTime())));
     document.getElementById('mvSummary').textContent = `單位：${unit}　共 ${data.length} 份儲存資料　最新更新：${latest.toLocaleString('zh-TW')}`;
     renderMerged();
@@ -2683,15 +2631,17 @@ document.getElementById('mvRefreshBtn').onclick = ()=>{
     loadMasterUnit(currentUnit);
   } else {
     supabaseClient.rpc('get_unit_submissions', { p_unit: currentUnit, p_pin: currentPin }).then(({data,error})=>{
-      if(!error && data && data.length) enterManagerMode(data, currentUnit, currentPin);
+      if(!error) enterManagerMode(data || [], currentUnit, currentPin);
     });
   }
 };
 
 /* =========================================================================
-   帽子設定編輯器（只有非master的主管模式會用到；master模式下按鈕直接隱藏，
-   因為「跨單位總覽」沒有單一單位PIN可以拿來寫回）——沿用登入時驗證過的
-   currentUnit/currentPin，不需要另一組admin密碼。
+   Stage 設定編輯器（只有非master的主管模式會用到；master模式下按鈕直接隱藏
+   ——見enterManagerMode/enterMasterMode，因為「跨單位總覽」沒有單一單位PIN
+   可以拿來寫回）。沿用登入時已經驗證過的currentUnit/currentPin，不需要另一
+   組admin密碼。Jerry指示：改帽子太頻繁的話每次都要找工程改資料庫不現實，
+   所以把編輯器加回來，並把使用者看到的名稱從「帽子」全部改成「Stage」。
    ========================================================================= */
 let editingStages = [];
 function renderStageEditorList(){
@@ -2701,7 +2651,7 @@ function renderStageEditorList(){
     const row = document.createElement('div'); row.className = 'stage-editor-row';
     const colorInput = document.createElement('input'); colorInput.type = 'color'; colorInput.value = sd.color || '#8a8f9c';
     colorInput.oninput = ()=>{ sd.color = colorInput.value; };
-    const titleInput = document.createElement('input'); titleInput.type = 'text'; titleInput.value = sd.title; titleInput.placeholder = '帽子標題';
+    const titleInput = document.createElement('input'); titleInput.type = 'text'; titleInput.value = sd.title; titleInput.placeholder = 'Stage 標題';
     titleInput.oninput = ()=>{ sd.title = titleInput.value; };
     const upBtn = document.createElement('button'); upBtn.textContent = '↑'; upBtn.disabled = (i===0);
     upBtn.onclick = ()=>{ [editingStages[i-1], editingStages[i]] = [editingStages[i], editingStages[i-1]]; renderStageEditorList(); };
@@ -2709,7 +2659,7 @@ function renderStageEditorList(){
     downBtn.onclick = ()=>{ [editingStages[i+1], editingStages[i]] = [editingStages[i], editingStages[i+1]]; renderStageEditorList(); };
     const delBtn = document.createElement('button'); delBtn.textContent = '✕';
     delBtn.onclick = ()=>{
-      if(!confirm(`刪除帽子「${sd.title}」？已經歸在這個帽子下的舊資料不會消失（仍會顯示，標成「已移除的帽子」），但以後這個單位的人都不能再往裡面加新內容，也選不到這個帽子了。`)) return;
+      if(!confirm(`刪除 Stage「${sd.title}」？已經歸在這個Stage下的舊資料不會消失（仍會顯示，標成「已移除的 Stage」），但以後這個單位的人都不能再往裡面加新內容，也選不到這個Stage了。`)) return;
       editingStages.splice(i, 1);
       renderStageEditorList();
     };
@@ -2725,7 +2675,7 @@ document.getElementById('stageEditorOpenBtn').onclick = ()=>{
   document.getElementById('stageEditorOverlay').classList.add('open');
 };
 document.getElementById('stageEditorAddBtn').onclick = ()=>{
-  const title = prompt('新帽子的標題：', '新帽子');
+  const title = prompt('新 Stage 的標題：', '新 Stage');
   if(!title || !title.trim()) return;
   const id = 'stage_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
   editingStages.push({ id, title: title.trim(), color: '#8a8f9c' });
@@ -2735,18 +2685,18 @@ document.getElementById('stageEditorCancelBtn').onclick = ()=>{
   document.getElementById('stageEditorOverlay').classList.remove('open');
 };
 document.getElementById('stageEditorSaveBtn').onclick = async ()=>{
-  if(!editingStages.length){ alert('至少要保留一個帽子。'); return; }
-  if(editingStages.some(s=> !s.title || !s.title.trim())){ alert('每個帽子都要填標題。'); return; }
+  if(!editingStages.length){ alert('至少要保留一個 Stage。'); return; }
+  if(editingStages.some(s=> !s.title || !s.title.trim())){ alert('每個 Stage 都要填標題。'); return; }
   try{
     const { data, error } = await supabaseClient.rpc('update_unit_stages', {
       p_unit: currentUnit, p_stages: editingStages, p_pin: currentPin,
     });
     if(error) throw error;
-    if(!data){ alert('儲存失敗：PIN不正確，或帽子清單是空的。'); return; }
+    if(!data){ alert('儲存失敗：PIN不正確，或Stage清單是空的。'); return; }
     STAGE_DEFS = editingStages;
     document.getElementById('stageEditorOverlay').classList.remove('open');
     renderMerged();
-    alert('已儲存新的帽子設定，並套用到目前的彙整畫面。');
+    alert('已儲存新的 Stage 設定，並套用到目前的彙整畫面。');
   }catch(err){
     alert('儲存失敗：' + (err.message || err));
   }
@@ -2775,17 +2725,6 @@ document.getElementById('saveDataBtn').onclick = async ()=>{
     statusEl.textContent = '儲存失敗：' + (err.message || err);
   }
 };
-document.getElementById('reloadStagesBtn').onclick = async ()=>{
-  if(!requireSupabase()) return;
-  if(!identity){ alert('尚未登入身份。'); return; }
-  const before = JSON.stringify(STAGE_DEFS);
-  await loadUnitStagesFor(identity.unit);
-  renderAll();
-  alert(JSON.stringify(STAGE_DEFS) === before
-    ? `目前雲端上「${identity.unit}」還沒有自訂帽子（或跟現在畫面上的一樣），沒有變化。`
-    : `已套用「${identity.unit}」最新的帽子設定。`);
-};
-
 /* Export ▾ dropdown — toggles open/closed, closes on any click inside it
    (including a file-input choice, since a native file dialog is about to
    take over the screen anyway) or on any click elsewhere on the page. */
@@ -3036,13 +2975,10 @@ document.querySelectorAll('.example-pick').forEach(btn=>{
    open 的，畫面會先卡在登入頁，直到 handleLogin() 依角色呼叫
    enterStaffMode() 或 enterManagerMode() 才會顯示對應的 toolbar/畫布並渲染。 */
 (function(){
-  // 只是方便回訪的員工不用每次重打姓名/角色——單位跟PIN每次仍要重選/重填。
+  // 只是方便回訪的員工不用每次重打姓名——單位跟PIN每次仍要重選/重填。
   const cached = getIdentity();
-  if(cached){
-    const nameInput = document.getElementById('loginNameInput');
-    const roleInput = document.getElementById('loginRoleInput');
-    if(cached.name) nameInput.value = cached.name;
-    if(cached.role) roleInput.value = cached.role;
+  if(cached && cached.name){
+    document.getElementById('loginNameInput').value = cached.name;
   }
 })();
 </script>
