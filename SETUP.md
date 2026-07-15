@@ -6,7 +6,7 @@
 
 - `index.html` — **現在唯一要發給大家的網址**。進去就是一個統一登入頁（選單位＋輸入PIN），依PIN決定是進到員工畫圖模式、單一單位主管彙整模式、還是Master跨單位總覽模式（見下方「登入身份」一節）。
 - `flow-builder.html` / `manager-view.html` — 舊版的兩個獨立檔案（員工版／主管版分開），已被 `index.html`取代，留著只是備份，不需要再發這兩個網址給任何人。
-- `supabase-schema.sql` — 建立資料庫用的 SQL；`master-support.sql` — 新增 Master 跨單位總覽功能用的 SQL；`pin-verify-support.sql` — 讓「PIN對不對」跟「有沒有資料」分開判斷（沒有這份的話，還沒有人存過檔的單位，連PIN正確的主管都會被擋在登入頁外）。第一次設定時三份都要在 Supabase SQL Editor 跑過。
+- `supabase-schema.sql` — 建立資料庫用的 SQL；`master-support.sql` — 新增 Master 跨單位總覽功能用的 SQL；`pin-verify-support.sql` — 讓「PIN對不對」跟「有沒有資料」分開判斷（沒有這份的話，還沒有人存過檔的單位，連PIN正確的主管都會被擋在登入頁外）；`save-submission-support.sql` — 修正「儲存資料」會被RLS擋下來的bug（見下方「已修過的bug」一節）。第一次設定時四份都要在 Supabase SQL Editor 跑過。
 
 ## 步驟 1：建立 Supabase 專案
 
@@ -17,7 +17,7 @@
    - **單位名稱務必跟填寫者存檔時填的單位名稱完全一致**（工具會自動把英文轉大寫、去掉頭尾空白，所以「Div4」「div4」「 DIV4 」都會變成「DIV4」——`unit_pins`裡的名稱也要用「DIV4」這個大寫形式，才能對上）。
 3. 左側選單找 **Settings → API**，記下兩個值：
    - **Project URL**（例如 `https://xxxxx.supabase.co`）
-   - **anon public** 這組 key（一長串字串，不是 service_role key，那組絕對不要放進前端檔案）
+   - **anon public** 這組 key ——**要用「Legacy API keys」區塊裡那組`eyJ...`開頭的JWT格式key，不要用新版的`sb_publishable_...`格式**。已知取捨：測試時發現新版`sb_publishable_...` key在這個專案上，直接寫入有RLS政策的表（`submissions`）會被擋下來回401（呼叫SECURITY DEFINER函式不受影響），懷疑是Supabase新版key系統目前跟RLS的相容性問題；`index.html`目前用的就是舊版JWT key，Supabase官方說舊版key會繼續可用，不會被停用，先這樣用沒問題。不管哪一種都不是service_role key，那組絕對不要放進前端檔案。
 
 ## 步驟 2：把連線資訊填進 index.html
 
@@ -76,9 +76,14 @@ anon key是設計成可以放在前端程式碼裡公開的（真正的存取控
 - **換單位PIN**：Supabase Table Editor 開 `unit_pins` 表，改那一格即可，不影響已經存的資料或Stage設定。
 - **換Master PIN**：同一張 `unit_pins` 表裡 `unit_name='MASTER'` 那一列。
 - **新增單位**：在 `unit_pins` 表新增一列（單位名稱要用跟填寫者一致的正規化名稱，通常就是英文全大寫），`stages` 欄位留空即可；也要記得把 `index.html` 登入頁的 `<select id="loginUnitSelect">` 加一個對應的 `<option>`。
-- **有人反應存檔失敗**：多半是還沒填 SUPABASE_URL/ANON_KEY，或 Supabase 專案本身被暫停（免費方案閒置一段時間可能會被自動暫停，需要進 Supabase 後台喚醒）。
+- **有人反應存檔失敗**：多半是還沒填 SUPABASE_URL/ANON_KEY，或 Supabase 專案本身被暫停（免費方案閒置一段時間可能會被自動暫停，需要進 Supabase 後台喚醒）。如果錯誤訊息裡有出現「row-level security policy」，先確認`save-submission-support.sql`有沒有跑過（見下方「已修過的bug」）。
 - **有人反應Stage跑掉了/跟別人不一樣**：先確認他登入時選的「單位」是不是跟主管設定時用的單位不一致。
 - **`flow-builder.html`/`manager-view.html` 這兩個舊檔案**：已經不對外發連結，但程式碼還在，純粹當作備份／參考；`index.html` 才是唯一實際維護、實際發給大家用的檔案，之後修bug只改 `index.html` 就好。
+
+## 已修過的bug（如實記錄，方便以後查）
+
+- **「儲存失敗：new row violates row-level security policy for table submissions」**：原本前端存檔是直接對`submissions`表做`.upsert()`（INSERT+ON CONFLICT DO UPDATE）。問題在於：這個表故意沒開SELECT權限給anon（避免任何人打開瀏覽器開發工具就能撈到全部單位資料），但Postgres處理「這筆資料跟既有資料是否衝突」這個判斷時，在RLS底下需要能看到既有資料，看不到就直接把整個操作判定成RLS違規——即使INSERT/UPDATE政策本身內容都是對的（可以用`select * from pg_policies where tablename='submissions'`驗證）。也已經排除過其他可能：政策不是restrictive、grant權限正常、換成舊版anon key結果一樣、也確認過沒有重複的同名表。最後用瀏覽器DevTools的Network分頁直接看實際request/response（狀態碼401、`code:42501`）搭配SQL Editor重現（`set role anon`直接測試），才逐步排除掉「key錯誤」「表衝突」等方向，鎖定是ON CONFLICT語法本身的問題（測試發現拿掉ON CONFLICT、單純INSERT就成功）。修法：把儲存包成`save_submission()`這個SECURITY DEFINER函式（見`save-submission-support.sql`），在資料庫內部執行upsert、不受RLS限制，前端改叫這個函式。
+- **新版`sb_publishable_...` API key在這個專案上，直接寫入有RLS的表會回401**：換成舊版JWT格式的anon key（`eyJ...`開頭，在Supabase Settings → API的「Legacy API keys」區塊）後恢復正常。懷疑是Supabase新版key系統目前跟RLS的相容性問題（呼叫SECURITY DEFINER函式不受影響，只有直接對表寫入才會踩到）。`index.html`目前用的是舊版key，之後如果Supabase修好了、想換回新版key，記得先在測試環境驗證存檔功能沒問題才換。
 
 ## 已知的限制（如實告知，不是要嚇你，是讓你判斷夠不夠用）
 

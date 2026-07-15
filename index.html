@@ -2797,13 +2797,17 @@ document.getElementById('saveDataBtn').onclick = async ()=>{
   if(!requireSupabase()) return;
   if(!identity){ statusEl.classList.add('error'); statusEl.textContent = '尚未登入身份，無法儲存。'; return; }
   try{
-    const { error } = await supabaseClient.from('submissions').upsert({
-      submitter_name: identity.name,
-      submitter_unit: identity.unit,
-      submitter_role: identity.role,
-      model_json: MODEL,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'submitter_name,submitter_unit,submitter_role' });
+    /* 改叫save_submission這個SECURITY DEFINER函式，不再直接對submissions
+       表做.upsert()——原本直接upsert會在ON CONFLICT DO UPDATE這條路徑上
+       被RLS擋下來（因為anon刻意沒有SELECT政策，Postgres判斷「有沒有衝突」
+       時連帶需要看到既有資料，看不到就直接回報成RLS違規），改成函式內部
+       執行就完全不受RLS限制，跟其他讀取函式是同一套模式。 */
+    const { error } = await supabaseClient.rpc('save_submission', {
+      p_name: identity.name,
+      p_unit: identity.unit,
+      p_role: identity.role,
+      p_model: MODEL,
+    });
     if(error) throw error;
     const now = new Date();
     statusEl.classList.remove('error');
