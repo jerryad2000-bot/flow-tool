@@ -428,7 +428,7 @@ input,textarea{font-family:inherit;}
     </select>
     <label>PIN 碼</label>
     <input type="password" id="loginPinInput" placeholder="向管理者索取" />
-    <label>姓名<span class="login-hint">（Master／主管檢視不需填）</span></label>
+    <label>姓名<span class="login-hint">（Master／主管檢視不需填；資料以姓名辨識身份，每次輸入需完全一致，包含大小寫，否則會被視為不同的人）</span></label>
     <input type="text" id="loginNameInput" placeholder="例如：王小明" />
     <div class="tiny-modal-actions">
       <button class="tm-primary" id="loginConfirmBtn">登入</button>
@@ -2697,7 +2697,7 @@ document.getElementById('mvRefreshBtn').onclick = ()=>{
 async function enterOwnFlowFromManager(){
   if(!managerContext) return;
   if(!identity || !identity.name){
-    const name = prompt('請輸入你的姓名，用於儲存你自己的Flow：');
+    const name = prompt('請輸入你的姓名，用於儲存你自己的Flow：\n（請注意：資料以姓名辨識身份，每次輸入需完全一致，包含大小寫，否則會被視為不同的人）');
     if(!name || !name.trim()) return;
     identity = { name: name.trim(), unit: managerContext.unit, role: '' };
   }
