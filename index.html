@@ -281,7 +281,7 @@ input,textarea{font-family:inherit;}
    draggable anyway, so the exact spot doesn't matter) and are NOT
    auto-connected — creating and connecting are separate actions now. */
 .node-top-actions{position:absolute; top:-42px; left:50%; width:130px; height:42px; transform:translateX(-50%);
-  display:flex; justify-content:center; align-items:flex-start; gap:5px; opacity:0; transition:opacity .1s; z-index:8; pointer-events:auto;}
+  display:flex; justify-content:center; align-items:flex-start; gap:5px; opacity:0; transition:opacity .1s; z-index:35; pointer-events:auto;}
 .node:hover .node-top-actions, .node-top-actions:hover{opacity:1;}
 .top-action-btn{position:relative; width:24px; height:24px; border-radius:50%; border:1px solid var(--border); background:#fff; font-size:11px; padding:0;
   line-height:22px; box-shadow:var(--shadow); color:var(--rect-border);}
@@ -652,7 +652,7 @@ input,textarea{font-family:inherit;}
    雲端連線」；本機畫圖、Export▾ 選單裡的匯出JSON/Markdown/合併匯入不受
    影響。詳細建置步驟見 SETUP.md。 */
 const SUPABASE_URL = 'https://tksolsqxthxlfdoocqtg.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_BHFnVC2x70HOwgJgw6MULg_DyT6ACJq';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRrc29sc3F4dGh4bGZkb29jcXRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQwMTI0ODEsImV4cCI6MjA5OTU4ODQ4MX0.7XFvXwINFo7y6M_eS8xCiajq-RgknuBCTlcn9mp_Fyk'; // 換回舊版JWT格式的anon key——新版sb_publishable_key在這個專案上，直接寫入有RLS的資料表(submissions)時會回401/42501，但呼叫SECURITY DEFINER函式(get_my_submission等)正常，懷疑是新版key系統目前跟RLS的相容性問題，先用舊版key繞過。
 const supabaseClient = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase)
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
   : null;
@@ -1803,11 +1803,22 @@ function updateGeometry(){
   edgeSvg.setAttribute('height', totalH);
   edgeSvg.setAttribute('viewBox', `0 0 ${totalW} ${totalH}`);
 
-  if(!edgeSvg.querySelector('defs')){
-    edgeSvg.insertAdjacentHTML('afterbegin', `<defs>
+  /* 用「有沒有#arrow這個specific marker」判斷，不是「有沒有defs這個標籤」
+     ——因為#edgeSvg跟主管的彙整畫面(renderMerged)共用同一個DOM節點（見
+     enterOwnFlowFromManager的架構註解），彙整那邊會先插入mvArrow/mvArrowRed
+     的defs，如果這裡只檢查「有defs就跳過」，會誤判成「我的箭頭也已經插好
+     了」，導致marker-end="url(#arrow)"指到一個根本不存在的id，箭頭整條消失
+     不見——這正是Jerry回報「箭頭不見了」的根本原因。 */
+  let edgeDefs = edgeSvg.querySelector('defs');
+  if(!edgeDefs){
+    edgeDefs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+    edgeSvg.insertBefore(edgeDefs, edgeSvg.firstChild);
+  }
+  if(!edgeDefs.querySelector('#arrow')){
+    edgeDefs.insertAdjacentHTML('beforeend', `
       <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7a7f8c"/></marker>
       <marker id="arrowRed" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker>
-    </defs>`);
+    `);
   }
   Array.from(edgeSvg.querySelectorAll('path.edge-path, path.edge-hit')).forEach(p=>p.remove());
   edgeDeco.innerHTML = '';
@@ -2533,11 +2544,19 @@ function renderMerged(){
     const totalHeight = canvas.scrollHeight;
     edgeSvg.setAttribute('width', totalWidth); edgeSvg.setAttribute('height', totalHeight);
     edgeSvg.setAttribute('viewBox', `0 0 ${totalWidth} ${totalHeight}`);
-    if(!edgeSvg.querySelector('defs')){
-      edgeSvg.insertAdjacentHTML('afterbegin', `<defs>
+    // 同上：檢查specific的#mvArrow marker，不是「有沒有defs」——同一個
+    // #edgeSvg也被「畫我的Flow」那條interactive渲染管線共用，那邊可能已經
+    // 先插入了自己的#arrow/#arrowRed defs。
+    let mvEdgeDefs = edgeSvg.querySelector('defs');
+    if(!mvEdgeDefs){
+      mvEdgeDefs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+      edgeSvg.insertBefore(mvEdgeDefs, edgeSvg.firstChild);
+    }
+    if(!mvEdgeDefs.querySelector('#mvArrow')){
+      mvEdgeDefs.insertAdjacentHTML('beforeend', `
         <marker id="mvArrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#7a7f8c"/></marker>
         <marker id="mvArrowRed" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#c0392b"/></marker>
-      </defs>`);
+      `);
     }
     edgeSvg.querySelectorAll('path.mv-edge-path').forEach(p=>p.remove());
     edgeDeco.innerHTML = ''; edgeDeco.style.width = totalWidth+'px'; edgeDeco.style.height = totalHeight+'px';
