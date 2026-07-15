@@ -1254,7 +1254,7 @@ function buildOrgUnitRow(unit){
     const addRoleBtn = document.createElement('button');
     addRoleBtn.className = 'org-add-btn'; addRoleBtn.textContent = '＋ 新增角色';
     addRoleBtn.onclick = ()=>{
-      const name = prompt('新角色名稱（例如：設計師 / 工程師 / PM）：', '新角色');
+      const name = prompt('新角色名稱（比如 PM、Sales、Marketer、UI 等）：', '新角色');
       if(name===null) return;
       if(!unit.roles) unit.roles = [];
       unit.roles.push({ id: uid('r'), name: normalizeOrgName(name) || '新角色', collapsed:false });
@@ -1294,7 +1294,7 @@ function buildOrgRoleRow(unit, role){
     const addTaskBtn = document.createElement('button');
     addTaskBtn.className = 'org-add-btn'; addTaskBtn.textContent = '＋ 新增任務';
     addTaskBtn.onclick = ()=>{
-      const name = prompt('新任務名稱：', '新任務');
+      const name = prompt('新任務名稱（比如 網站建置類、廠商建檔類、KV設計類、產品型錄類等）：', '新任務');
       if(name===null) return;
       MODEL.tasks.push(newTask(name || '新任務', unit.id, role.id));
       renderAll();
@@ -2206,7 +2206,7 @@ function mergeImportModel(incoming){
 }
 
 document.getElementById('addUnitBtn').onclick = ()=>{
-  const name = prompt('新單位名稱（例如：UX部門 / UI部門 / PM部門）：', '新單位');
+  const name = prompt('新單位名稱（比如 Marketing、Social、Sales 等）：', '新單位');
   if(name===null) return;
   if(!MODEL.units) MODEL.units = [];
   MODEL.units.push({ id: uid('u'), name: normalizeOrgName(name) || '新單位', collapsed:false, roles:[] });
