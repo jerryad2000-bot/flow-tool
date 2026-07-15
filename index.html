@@ -103,7 +103,7 @@ input,textarea{font-family:inherit;}
 .tiny-modal-card input{width:100%; box-sizing:border-box; border:1px solid var(--m-border); border-radius:7px; padding:7px 9px; font-size:12.5px; background:#fff; color:var(--m-ink);}
 .tiny-modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:18px;}
 .tiny-modal-actions button{border:none; border-radius:7px; padding:7px 14px; font-size:12px; cursor:pointer;}
-.tiny-modal-actions .tm-primary{background:var(--m-accent); color:var(--m-accent-ink);}
+.tiny-modal-actions .tm-primary{background:var(--m-accent); color:#fff;}
 .tiny-modal-actions .tm-secondary{background:transparent; color:var(--m-muted);}
 
 
@@ -176,6 +176,8 @@ input,textarea{font-family:inherit;}
 /* -- 教學 tab: numbered, illustrated step cards -- */
 .tut-wrap{padding:26px 34px; max-width:860px; margin:0 auto;}
 .tut-notice{font-size:12px; color:var(--m-accent-ink); background:var(--m-accent-soft); border:1px solid var(--m-accent); border-radius:8px; padding:10px 14px; margin-bottom:16px; line-height:1.6;}
+.tut-priority{font-size:12.5px; color:var(--m-danger); background:var(--red-soft); border:1.5px solid var(--m-danger); border-radius:8px; padding:12px 14px; margin-bottom:16px; line-height:1.6; font-weight:700;}
+.tut-priority b{font-weight:800;}
 .tut-intro{font-size:13px; color:var(--muted); margin-bottom:22px; line-height:1.6;}
 .tut-step{display:flex; gap:16px; padding:18px 0; border-bottom:1px solid var(--border-soft);}
 .tut-step:last-child{border-bottom:none;}
@@ -377,6 +379,9 @@ input,textarea{font-family:inherit;}
     <button class="tbtn" id="saveDataBtn">儲存資料</button>
     <span class="save-status" id="saveStatusText"></span>
     <span class="filter-status" id="filterStatus"></span>
+    <!-- 只有透過「畫我的Flow」從主管彙整模式切過來時才顯示（見managerContext）
+         ——一般用asus登入的員工沒有彙整可以回去看，這顆按鈕預設藏著。 -->
+    <button class="tbtn" id="backToAggregateBtn" style="display:none;">查看彙整</button>
     <button class="tb-link" id="openHelpModalBtn">教學與範例</button>
     <button class="tb-link" id="switchIdentityBtn">登出</button>
     <div class="export-dropdown" id="exportDropdown">
@@ -395,6 +400,9 @@ input,textarea{font-family:inherit;}
   <div class="brand"><span class="dot"></span> Flow 繪製工具</div>
   <div class="tb-right">
     <span id="mvSummary" class="mv-summary-text"></span>
+    <!-- 只有一般主管模式看得到（isMasterMode時由JS隱藏）——master沒有單一
+         單位的PIN，沒辦法用自己的名字存回某個單位。 -->
+    <button class="tbtn" id="drawOwnFlowBtn">畫我的 Flow</button>
     <!-- 只有一般主管模式看得到（isMasterMode時由JS隱藏）——因為改Stage要用
          該單位自己的PIN寫回，Master沒有單一單位的PIN可以拿來寫。 -->
     <button class="tbtn" id="stageEditorOpenBtn">⚙ 設定 Stage</button>
@@ -498,6 +506,7 @@ input,textarea{font-family:inherit;}
 
       <div class="modal-tab-content active" id="tutorialTab">
         <div class="tut-wrap">
+          <div class="tut-priority"><b>優先步驟（給各單位主管）：</b>員工開始畫圖前，請單位主管先用單位PIN登入，點右上角「⚙ 設定 Stage」，把這個單位的流程階段設定好。沒先設定的話，大家會先看到內建預設的6個階段，之後主管改了Stage，舊資料不會消失，但已經畫好的節點需要重新對照新的Stage歸類。</div>
           <div class="tut-notice">此工具是快速幫大家繪製工作流的 Beta 版，在拉線時難免有繞圈、彎曲的問題，可以自行拖曳各方框之間的距離來調整。</div>
           <div class="tut-intro">這份工具的核心操作只有五步：先建立單位／角色歸屬、再新增任務與步驟、拖曳圓點畫線、點選連線編輯、最後匯出。以下用簡圖示範。</div>
 
@@ -2203,16 +2212,32 @@ document.getElementById('addUnitBtn').onclick = ()=>{
    DOM（同一時間只會有一種模式在用），只是切換要顯示哪個 toolbar/legend、
    呼叫 renderAll()（員工）還是 renderMerged()（主管/master）。
    ========================================================================= */
-let identity = null;          // { name, unit, role } —— 只有員工模式才有值
-let currentUnit = '', currentPin = ''; // 主管/master模式：驗證通過的單位／PIN，供「重新整理」「帽子設定」沿用
+let identity = null;          // { name, unit, role } —— 員工模式，或主管切到「畫我的Flow」時才有值
+let currentUnit = '', currentPin = ''; // 主管/master模式：驗證通過的單位／PIN，供「重新整理」「設定Stage」沿用
 let isMasterMode = false;
-const IDENTITY_KEY = 'flowBuilderIdentity';
-function getIdentity(){
-  try{ return JSON.parse(localStorage.getItem(IDENTITY_KEY) || 'null'); }
-  catch(e){ return null; }
+let managerContext = null;    // { unit, pin } —— 只有用單位真實PIN（非asus、非master）登入時才有值。
+                               // 讓主管在「彙整檢視」跟「畫我的Flow」之間切換時，不用重新輸入PIN。
+/* 依Jerry指示：登入資訊改成快取整組session（單位/PIN/姓名），12小時內重新
+   整理頁面不用再輸入PIN；舊版只快取姓名的getIdentity/saveIdentity已移除。
+   已知取捨：PIN會以明碼存在瀏覽器localStorage——跟這幾組PIN本身「不算機密、
+   主管間互看無妨」的既有取捨一致，如果之後PIN變敏感，這個快取機制要一起
+   重新評估。 */
+const SESSION_KEY = 'flowBuilderSession';
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12小時
+function saveSession(session){
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify({ ...session, savedAt: Date.now() })); }
+  catch(e){ /* localStorage 不可用（例如私密瀏覽模式）——不影響當前這次的操作 */ }
 }
-function saveIdentity(identity){
-  localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
+function loadSession(){
+  try{
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if(!s || !s.savedAt) return null;
+    if(Date.now() - s.savedAt > SESSION_TTL_MS){ localStorage.removeItem(SESSION_KEY); return null; }
+    return s;
+  }catch(e){ return null; }
+}
+function clearSession(){
+  try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
 }
 /* 帽子是「綁在單位上」的（見 SETUP.md 說明）——不同BU的工作流程可能完全不
    同，所以由各單位主管自己用單位PIN定義。這裡只負責「讀」：一旦知道使用者
@@ -2248,7 +2273,7 @@ async function tryAutoLoadMySubmission(idn){
 }
 async function enterStaffMode(idn){
   identity = idn;
-  saveIdentity({ name: idn.name }); // 單位每次登入重選，不快取
+  saveSession({ mode:'staff', unit: idn.unit, name: idn.name });
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('mvToolbar').style.display = 'none';
   document.getElementById('staffToolbar').style.display = '';
@@ -2266,9 +2291,11 @@ function resetToLoginGate(){
   document.getElementById('masterDivPicker').style.display = 'none';
   document.getElementById('sidePanel').style.display = '';
   document.getElementById('stageEditorOverlay').classList.remove('open');
+  document.getElementById('backToAggregateBtn').style.display = 'none';
   const pinInput = document.getElementById('loginPinInput'); if(pinInput) pinInput.value = '';
   const statusEl = document.getElementById('saveStatusText'); if(statusEl){ statusEl.textContent=''; statusEl.classList.remove('error'); }
-  identity = null; currentUnit=''; currentPin=''; isMasterMode=false;
+  identity = null; currentUnit=''; currentPin=''; isMasterMode=false; managerContext=null;
+  clearSession();
   MODEL = blankModel(); uidCounter = 1;
   document.getElementById('loginGateOverlay').classList.add('open');
 }
@@ -2545,6 +2572,8 @@ function renderMerged(){
 async function enterManagerMode(rows, unit, pin){
   isMasterMode = false;
   currentUnit = unit; currentPin = pin;
+  managerContext = { unit, pin }; // 讓「畫我的Flow」按鈕知道要沿用哪個單位/PIN
+  saveSession({ mode:'manager', unit, pin, name: (identity && identity.name) || '' });
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('staffToolbar').style.display = 'none';
   document.getElementById('mvToolbar').style.display = '';
@@ -2552,6 +2581,7 @@ async function enterManagerMode(rows, unit, pin){
   document.getElementById('sidePanel').style.display = 'none';
   document.getElementById('masterDivPicker').style.display = 'none';
   document.getElementById('stageEditorOpenBtn').style.display = '';
+  document.getElementById('drawOwnFlowBtn').style.display = '';
 
   STAGE_DEFS = DEFAULT_STAGE_DEFS.map(s=>({...s}));
   MODEL = blankModel(); uidCounter = 1;
@@ -2581,6 +2611,8 @@ async function enterManagerMode(rows, unit, pin){
 async function enterMasterMode(pin){
   isMasterMode = true;
   currentPin = pin;
+  managerContext = null; // master沒有單一單位PIN，不能像一般主管一樣切去畫自己的Flow
+  saveSession({ mode:'master', pin });
   document.getElementById('loginGateOverlay').classList.remove('open');
   document.getElementById('staffToolbar').style.display = 'none';
   document.getElementById('mvToolbar').style.display = '';
@@ -2588,6 +2620,7 @@ async function enterMasterMode(pin){
   document.getElementById('sidePanel').style.display = 'none';
   document.getElementById('masterDivPicker').style.display = '';
   document.getElementById('stageEditorOpenBtn').style.display = 'none';
+  document.getElementById('drawOwnFlowBtn').style.display = 'none';
   await loadMasterUnit('DIV1'); // 預設先看第一個Div；master PIN本身已在handleLogin用verify_master_pin驗證過，這裡不會再把「這個Div沒資料」誤判成PIN錯
 }
 function setActiveMasterDivBtn(unit){
@@ -2635,6 +2668,42 @@ document.getElementById('mvRefreshBtn').onclick = ()=>{
     });
   }
 };
+
+/* 依Jerry指示：0000（單位主管PIN）不該只能唯讀看彙整——主管有時自己也要
+   畫flow，所以加一個切換：預設還是先看彙整（跟組員互動最常見的情境），
+   但可以隨時切到「畫我的Flow」（跟員工模式共用同一套可編輯畫布/儲存/
+   Export），畫完可以再切回彙整——中途不用登出重新輸入PIN。master不適用
+   （master沒有單一單位PIN，沒地方可以存回去），入口按鈕在enterMasterMode
+   裡已經隱藏。 */
+async function enterOwnFlowFromManager(){
+  if(!managerContext) return;
+  if(!identity || !identity.name){
+    const name = prompt('請輸入你的姓名，用於儲存你自己的Flow：');
+    if(!name || !name.trim()) return;
+    identity = { name: name.trim(), unit: managerContext.unit, role: '' };
+  }
+  saveSession({ mode:'manager', unit: managerContext.unit, pin: managerContext.pin, name: identity.name });
+  document.getElementById('mvToolbar').style.display = 'none';
+  document.getElementById('staffToolbar').style.display = '';
+  document.getElementById('backToAggregateBtn').style.display = '';
+  document.getElementById('sidePanel').style.display = '';
+  document.getElementById('masterDivPicker').style.display = 'none';
+  MODEL = blankModel(); uidCounter = 1;
+  await tryAutoLoadMySubmission(identity);
+  await loadUnitStagesFor(identity.unit);
+  renderAll();
+}
+async function backToAggregateFromOwnFlow(){
+  if(!managerContext || !requireSupabase()) return;
+  document.getElementById('staffToolbar').style.display = 'none';
+  try{
+    const { data, error } = await supabaseClient.rpc('get_unit_submissions', { p_unit: managerContext.unit, p_pin: managerContext.pin });
+    if(error){ alert('讀取彙整失敗：' + error.message); document.getElementById('staffToolbar').style.display = ''; return; }
+    await enterManagerMode(data || [], managerContext.unit, managerContext.pin);
+  }catch(err){ alert('連線失敗：' + (err.message || err)); document.getElementById('staffToolbar').style.display = ''; }
+}
+document.getElementById('drawOwnFlowBtn').onclick = enterOwnFlowFromManager;
+document.getElementById('backToAggregateBtn').onclick = backToAggregateFromOwnFlow;
 
 /* =========================================================================
    Stage 設定編輯器（只有非master的主管模式會用到；master模式下按鈕直接隱藏
@@ -2973,12 +3042,32 @@ document.querySelectorAll('.example-pick').forEach(btn=>{
    ========================================================================= */
 /* 不在這裡呼叫 renderAll()——登入頁（loginGateOverlay）在HTML裡預設就是
    open 的，畫面會先卡在登入頁，直到 handleLogin() 依角色呼叫
-   enterStaffMode() 或 enterManagerMode() 才會顯示對應的 toolbar/畫布並渲染。 */
+   enterStaffMode()／enterManagerMode()／enterMasterMode() 才會顯示對應的
+   toolbar/畫布並渲染。以下這個IIFE負責在頁面載入時檢查有沒有12小時內的
+   有效session，有的話直接跳過登入頁——依Jerry指示，登入表單本身不再預設
+   帶入任何姓名，重新整理頁面靠這個session機制免登入，不是靠表單記憶。 */
 (function(){
-  // 只是方便回訪的員工不用每次重打姓名——單位跟PIN每次仍要重選/重填。
-  const cached = getIdentity();
-  if(cached && cached.name){
-    document.getElementById('loginNameInput').value = cached.name;
+  const session = loadSession();
+  if(!session) return;
+  if(session.mode === 'staff'){
+    document.getElementById('loginUnitSelect').value = session.unit;
+    enterStaffMode({ name: session.name, unit: session.unit, role: '' });
+  } else if(session.mode === 'manager'){
+    if(!supabaseClient) return; // 靜靜放棄自動登入，不要用alert打斷頁面剛載入就跳出來
+    if(session.name) identity = { name: session.name, unit: session.unit, role: '' };
+    supabaseClient.rpc('verify_unit_pin', { p_unit: session.unit, p_pin: session.pin }).then(({ data: ok, error })=>{
+      if(error || !ok){ clearSession(); return; } // PIN可能被後台改過，快取失效就乖乖顯示登入頁，不強行放行
+      supabaseClient.rpc('get_unit_submissions', { p_unit: session.unit, p_pin: session.pin }).then(({ data, error: err2 })=>{
+        if(err2){ clearSession(); return; }
+        enterManagerMode(data || [], session.unit, session.pin);
+      });
+    });
+  } else if(session.mode === 'master'){
+    if(!supabaseClient) return;
+    supabaseClient.rpc('verify_master_pin', { p_pin: session.pin }).then(({ data: ok, error })=>{
+      if(error || !ok){ clearSession(); return; }
+      enterMasterMode(session.pin);
+    });
   }
 })();
 </script>
